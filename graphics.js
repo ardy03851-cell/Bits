@@ -5,17 +5,14 @@
 
    CHANGES IN THIS VERSION
    -------------------------------------------------------------------------
-   • Model shader now consumes attribute 3 (UV) and a sampler2D, so
-     plane.png / propeller.png / tree_*.png actually appear.
-   • Each mesh is drawn with its own texture (mesh.texture) — plane,
-     propeller and every tree variant use their own image.
-   • Trees render the correct variant mesh (Models.getTreeMesh(obj))
-     instead of always drawing the default oak.
-   • Water waves: layered directional sines with irrational frequency
-     ratios plus two octaves of value noise, so ripples no longer line up
-     into an obvious grid.
-   • Lighting: subtle sky/ground hemisphere tint on models, slightly
-     warmer sun bounce on terrain.  Same overall look, gentler falloff.
+   • Terrain shader now evaluates the SAME temperature / moisture fields as
+     models.js, so each biome renders with its own palette:
+        ocean · beach · desert · savanna · jungle · swamp · plains ·
+        forest · tundra · snow · badlands · highlands · mountain
+   • Snow line and rock line moved up to match the taller mountains.
+   • HUD shows the current biome by name (Terrain.getBiome).
+   • Water, lighting, texture pipeline and models kept from the previous
+     pass — only terrain colouring and the HUD changed.
    ========================================================================= */
 
 const canvas = document.getElementById('glcanvas');
@@ -226,7 +223,13 @@ void main(){
 }`);
 const skyU = locs(skyProg, ['uInvViewProj','uCamPos','uSunDir','uSunColor','uSkyTop','uSkyHorizon','uGroundColor']);
 
-/* ---- terrain ---- */
+/* --------------------------------------------------------------------------
+   TERRAIN
+   The fragment shader now reconstructs the biome fields (temperature and
+   moisture) using the same frequencies as models.js, then blends a
+   per-biome palette.  Altitude and slope override the lowland biome so
+   mountains, snow and badlands read correctly.
+   ------------------------------------------------------------------------ */
 const terrainProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -242,9 +245,44 @@ uniform vec3 uCamPos, uSunDir, uSunColor, uFogColor;
 uniform float uFogNear, uFogFar;
 out vec4 fragColor;
 
+/* ------- value noise + fbm, matching models.js closely enough -------- */
 float hash1(vec2 p){
   return fract(sin(dot(floor(p), vec2(12.9898, 78.233))) * 43758.5453);
 }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash1(i);
+  float b = hash1(i + vec2(1.0, 0.0));
+  float c = hash1(i + vec2(0.0, 1.0));
+  float d = hash1(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+/* Signed fbm, output roughly -1..1 (same as CPU version) */
+float fbm2(vec2 p){
+  float sum = 0.0, amp = 1.0, n = 0.0, f = 1.0;
+  for (int i = 0; i < 3; i++){
+    sum += (vnoise(p * f) * 2.0 - 1.0) * amp;
+    n   += amp;
+    amp *= 0.5;
+    f   *= 2.03;
+  }
+  return sum / n;
+}
+
+/* ------- biome palettes -------------------------------------------- */
+const vec3 C_BEACH     = vec3(0.88, 0.82, 0.62);
+const vec3 C_PLAINS    = vec3(0.44, 0.56, 0.26);
+const vec3 C_FOREST    = vec3(0.22, 0.42, 0.16);
+const vec3 C_JUNGLE    = vec3(0.12, 0.36, 0.14);
+const vec3 C_SWAMP     = vec3(0.28, 0.34, 0.18);
+const vec3 C_DESERT    = vec3(0.86, 0.74, 0.44);
+const vec3 C_SAVANNA   = vec3(0.70, 0.64, 0.30);
+const vec3 C_BADLANDS  = vec3(0.66, 0.36, 0.24);
+const vec3 C_TUNDRA    = vec3(0.58, 0.60, 0.52);
+const vec3 C_SNOW      = vec3(0.95, 0.97, 1.00);
+const vec3 C_MOUNTAIN  = vec3(0.44, 0.42, 0.40);
+const vec3 C_HIGHLAND  = vec3(0.46, 0.44, 0.36);
 
 void main(){
   vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
@@ -256,25 +294,63 @@ void main(){
   float slope = 1.0 - clamp(n.y, 0.0, 1.0);
   float h = vWorld.y;
 
-  vec3 sand   = vec3(0.86, 0.79, 0.58);
-  vec3 grass  = vec3(0.28, 0.46, 0.18);
-  vec3 grass2 = vec3(0.40, 0.55, 0.24);
-  vec3 rock   = vec3(0.42, 0.39, 0.35);
-  vec3 snow   = vec3(0.97, 0.98, 1.00);
+  /* ---- biome fields (same frequencies as models.js) ---- */
+  vec2 xz = vWorld.xz;
+  float t = fbm2(xz * 0.00045 + vec2(512.3, 941.7));
+  float m = fbm2(xz * 0.00072 + vec2(187.4, 623.1));
 
-  float v = hash1(vWorld.xz * 0.35);
-  vec3 albedo = mix(grass, grass2, v);
-  albedo = mix(albedo, sand, 1.0 - smoothstep(0.0, 5.0, h));
-  albedo = mix(albedo, rock, smoothstep(0.36, 0.62, slope));
-  albedo = mix(albedo, snow, smoothstep(58.0, 88.0, h) * (1.0 - smoothstep(0.52, 0.82, slope)));
+  /* small per-fragment jitter so the ground isn't a flat colour */
+  float v = hash1(xz * 0.35);
 
+  /* ---- lowland biome pick ------------------------------------ */
+  vec3 base;
+  if (t > 0.15 && m < -0.12) {
+    base = C_DESERT;
+  } else if (t > 0.18 && m < 0.10) {
+    base = C_SAVANNA;
+  } else if (t > 0.10 && m > 0.30) {
+    base = C_JUNGLE;
+  } else if (m > 0.42 && h < 12.0) {
+    base = C_SWAMP;
+  } else if (m > 0.05) {
+    base = C_FOREST;
+  } else {
+    base = C_PLAINS;
+  }
+  if (t < -0.42) base = C_SNOW;
+  else if (t < -0.28) base = C_TUNDRA;
+
+  /* Slight colour variation between neighbouring pixels */
+  base *= (0.92 + v * 0.16);
+
+  /* ---- altitude overrides ------------------------------------- */
+  if (h > 32.0 && t > 0.15 && m < -0.12) {
+    base = mix(base, C_BADLANDS, smoothstep(32.0, 46.0, h));
+  }
+  base = mix(base, C_MOUNTAIN, smoothstep(48.0, 62.0, h));
+  base = mix(base, C_HIGHLAND, smoothstep(62.0, 78.0, h));
+  base = mix(base, C_SNOW,     smoothstep(82.0, 100.0, h));
+  /* Cold high ground also gets snow */
+  base = mix(base, C_SNOW, smoothstep(60.0, 80.0, h) * smoothstep(-0.05, -0.30, t));
+
+  /* ---- beach fade near sea level ----------------------------- */
+  base = mix(C_BEACH, base, smoothstep(0.5, 3.0, h));
+
+  /* ---- rock on steep faces ----------------------------------- */
+  base = mix(base, C_MOUNTAIN, smoothstep(0.55, 0.80, slope) * 0.85);
+  /* Snow dusting doesn't stick to vertical cliffs */
+  base = mix(base, C_SNOW,
+    smoothstep(82.0, 100.0, h) * (1.0 - smoothstep(0.55, 0.80, slope)) * 0.55);
+
+  /* ---- shading ------------------------------------------------ */
   float ndl = max(dot(n, uSunDir), 0.0);
-  /* Subtle sky/ground hemisphere bounce — slightly warmer toward the sky */
+
+  /* Sky/ground hemisphere ambient */
   vec3 skyAmb = vec3(0.42, 0.46, 0.55);
   vec3 gndAmb = vec3(0.22, 0.20, 0.18);
   vec3 ambient = mix(gndAmb, skyAmb, n.y * 0.5 + 0.5);
 
-  vec3 col = albedo * (ambient + uSunColor * ndl * 1.12);
+  vec3 col = base * (ambient + uSunColor * ndl * 1.12);
 
   /* Soft sky rim */
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 4.0) * 0.14;
@@ -284,13 +360,15 @@ void main(){
   float sunAmount = pow(max(dot(viewDir, uSunDir), 0.0), 5.0);
   col += uSunColor * sunAmount * 0.12;
 
+  /* Fog */
   float fog = smoothstep(uFogNear, uFogFar, dist);
   col = mix(col, uFogColor, fog);
+
   fragColor = vec4(col, 1.0);
 }`);
 const terrU = locs(terrainProg, ['uViewProj','uCamPos','uSunDir','uSunColor','uFogColor','uFogNear','uFogFar']);
 
-/* ---- models (plane, propeller, trees) — NOW TEXTURED ---- */
+/* ---- models (plane, propeller, trees) — textured ---- */
 const modelProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -328,23 +406,18 @@ void main(){
   vec3 viewDir = toCam / max(dist, 1e-4);
   if (dot(n, viewDir) < 0.0) n = -n;
 
-  /* Sample the texture if one is bound; otherwise fall back to vertex colours */
   vec4 texSample = texture(uTexture, vUv);
-  /* Slight boost so a mid-tone PNG reads at roughly the same value as the
-     original vertex colours did. */
   vec3 texCol = texSample.rgb * 1.15;
   vec3 albedo = mix(vCol, texCol, uHasTexture);
 
   float ndl = max(dot(n, uSunDir), 0.0);
 
-  /* Subtle sky/ground hemisphere ambient (gentler than before) */
   vec3 skyAmb = vec3(0.34, 0.40, 0.50);
   vec3 gndAmb = vec3(0.20, 0.18, 0.16);
   vec3 amb = mix(gndAmb, skyAmb, n.y * 0.5 + 0.5);
 
   vec3 col = albedo * (amb + uSunColor * ndl * 1.22);
 
-  /* Soft specular */
   vec3 hv = normalize(uSunDir + viewDir);
   col += uSunColor * pow(max(dot(n, hv), 0.0), 48.0) * 0.42;
 
@@ -384,10 +457,7 @@ void main(){ fragColor = vec4(0.045, 0.050, 0.065, 1.0); }`);
 const outU = locs(outlineProg, ['uViewProj','uModel','uThickness','uResolution']);
 
 /* ---- water ----
-   Waves are now built from five directional sines with irrational
-   frequency ratios plus three octaves of value noise.  Because the
-   frequencies are not simple multiples of each other, crests no longer
-   line up into an obvious repeating grid.
+   Layered directional sines + value noise, no repeating grid.
 ------------------------------------------------------------------- */
 const waterProg = makeProgram(`#version 300 es
 precision highp float;
@@ -421,8 +491,6 @@ float vnoise(vec2 p){
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-/* Layered wave field.  Each directional sine has its own slow time
-   multiplier, so the surface keeps evolving instead of pulsing. */
 float waveHeight(vec2 p, float t){
   float h = 0.0;
   h += sin(dot(p, vec2( 0.0413,  0.0271)) + t * 0.91) * 0.36;
@@ -430,8 +498,6 @@ float waveHeight(vec2 p, float t){
   h += sin(dot(p, vec2( 0.0671, -0.0513)) + t * 1.83) * 0.18;
   h += sin(dot(p, vec2( 0.0131,  0.0831)) + t * 2.51) * 0.11;
   h += sin(dot(p, vec2( 0.1523,  0.1177)) + t * 3.31) * 0.06;
-  /* Two octaves of noise, drifting at different speeds, break the
-     remaining regularity. */
   h += (vnoise(p * 0.14 + t * 0.07) - 0.5) * 0.55;
   h += (vnoise(p * 0.42 - t * 0.11) - 0.5) * 0.28;
   h += (vnoise(p * 1.13 + t * 0.19) - 0.5) * 0.12;
@@ -454,7 +520,6 @@ void main(){
   float amp = 0.85;
   vec3 n = normalize(vec3((hL - hR) * amp, 2.0 * e, (hD - hU) * amp));
 
-  /* Depth-ish tint from wave crest height */
   float crest = clamp(hC * 0.5 + 0.5, 0.0, 1.0);
 
   float fres = pow(1.0 - max(dot(viewDir, n), 0.0), 3.0);
@@ -462,7 +527,6 @@ void main(){
   vec3 col = mix(deep, uSkyHorizon, clamp(fres, 0.0, 1.0) * 0.85);
 
   vec3 hv = normalize(uSunDir + viewDir);
-  /* Tight sparkle + broader sheen */
   col += uSunColor * pow(max(dot(n, hv), 0.0), 380.0) * 2.2;
   col += uSunColor * pow(max(dot(n, hv), 0.0), 22.0)  * 0.13;
 
@@ -479,7 +543,7 @@ const waterU = locs(waterProg, [
    ========================================================================= */
 Models.init(gl);
 
-/* Optional: log which textures actually arrived, helpful when debugging. */
+/* Optional: log which textures arrived, helpful when debugging. */
 if (Models.onAssetsLoaded) {
   Models.onAssetsLoaded((entry) => {
     if (entry.loaded) console.log('[SkyCube] texture loaded:', entry.path);
@@ -520,8 +584,10 @@ const SKY_TOP     = [0.24, 0.47, 0.80];
 const SKY_HORIZON = [0.86, 0.89, 0.93];
 const SKY_GROUND  = [0.56, 0.62, 0.66];
 const FOG_COLOR   = [0.82, 0.87, 0.92];
-const FOG_NEAR    = 500;
-const FOG_FAR     = 950;
+/* Fog pushed out a little because the new mountain ranges are visible
+   much further than the old low rolling terrain. */
+const FOG_NEAR    = 600;
+const FOG_FAR     = 1300;
 
 /* =========================================================================
    GAME STATE
@@ -958,7 +1024,6 @@ function render() {
   for (const ch of visible) {
     for (const obj of ch.objects) {
       if (obj.type !== 'tree') continue;
-      /* Resolve the correct variant mesh (oak, pine, palm, cactus, ...) */
       const mesh = obj.mesh || Models.getTreeMesh(obj);
       m4fromTRS(matModel, obj.position, obj.rotation, obj.scale);
       gl.uniformMatrix4fv(modelU.uModel, false, matModel);
@@ -1024,12 +1089,17 @@ function updateHud(dt) {
   const f = qRot(plane.q, [0, 0, -1]);
   let hdg = Math.atan2(f[0], -f[2]) * 180 / Math.PI;
   if (hdg < 0) hdg += 360;
+
+  /* Current biome under the aircraft */
+  const biome = Terrain.getBiome(plane.pos[0], plane.pos[2], plane.pos[1]);
+
   hudStats.innerHTML =
     `ALT ${alt.toFixed(0)} m<br>` +
     `SPD ${spd.toFixed(0)} km/h<br>` +
     `THR ${(throttleSmooth * 100).toFixed(0)}%<br>` +
     `HDG ${hdg.toFixed(0)}°<br>` +
-    `CHUNKS ${Terrain.chunks.size}`;
+    `CHUNKS ${Terrain.chunks.size}<br>` +
+    `BIOME ${biome.toUpperCase()}`;
 }
 
 /* pre-generate the initial view */
