@@ -826,6 +826,7 @@ void main(){
 precision highp float;
 in vec3 vDir;
 uniform vec3 uSunDir, uSunColor, uSkyTop, uSkyHorizon, uGroundColor;
+uniform float uLightning;
 out vec4 fragColor;
 void main(){
   vec3 d = normalize(vDir);
@@ -838,10 +839,11 @@ void main(){
   col += uSunColor * pow(sd, 40.0)   * 0.55;
   col += uSunColor * pow(sd, 6.0)    * 0.14;
   col += uSunColor * pow(sd, 2.0)    * 0.05;
+  col += vec3(0.72, 0.84, 1.0) * uLightning * 1.8;
   fragColor = vec4(col, 1.0);
 }`);
 const skyU = locs(skyProg,
-  ['uInvViewProj','uCamPos','uSunDir','uSunColor','uSkyTop','uSkyHorizon','uGroundColor']);
+  ['uInvViewProj','uCamPos','uSunDir','uSunColor','uSkyTop','uSkyHorizon','uGroundColor','uLightning']);
 
 /* ---- terrain ---- */
 const terrainProg = makeProgram(`#version 300 es
@@ -1142,14 +1144,115 @@ const skyMesh = (() => {
 /* =========================================================================
    ATMOSPHERE
    ========================================================================= */
-const SUN_DIR     = norm3([0.42, 0.50, -0.76]);
+/* Dynamic atmosphere / weather state.
+   Kept in JS so the weather can smoothly change the existing WebGL shaders
+   without replacing the renderer or touching terrain/model generation. */
+const SUN_DIR     = [0.42, 0.50, -0.76];
 const SUN_COLOR   = [1.00, 0.94, 0.80];
 const SKY_TOP     = [0.24, 0.47, 0.80];
 const SKY_HORIZON = [0.86, 0.89, 0.93];
 const SKY_GROUND  = [0.56, 0.62, 0.66];
 const FOG_COLOR   = [0.82, 0.87, 0.92];
-const FOG_NEAR    = 600;
-const FOG_FAR     = 1300;
+let FOG_NEAR      = 600;
+let FOG_FAR       = 1300;
+
+const WEATHER = {
+  enabled: true,
+  clock: 10.5,                 // in-game hours
+  dayLength: 360,              // real seconds per full 24h
+  rain: 0.0,
+  storm: 0.0,
+  wind: 0.20,
+  cloud: 0.18,
+  temperature: 0.55,
+  lightning: 0.0,
+  lightningTimer: 0,
+  lightningCooldown: 8,
+  mode: 'clear'
+};
+
+function weatherLerp(a, b, t) { return a + (b - a) * t; }
+function weatherSmooth(a, b, t) {
+  t = clamp(t, 0, 1);
+  return t * t * (3 - 2 * t);
+}
+function updateWeather(dt) {
+  if (!WEATHER.enabled) return;
+
+  WEATHER.clock = (WEATHER.clock + dt * (24 / WEATHER.dayLength)) % 24;
+
+  /* A slow, deterministic weather front. It feels alive without randomly
+     flipping the scene every few seconds. */
+  const front = 0.5 + 0.5 * Math.sin(WEATHER.clock * 0.31 + gameTime * 0.012);
+  const front2 = 0.5 + 0.5 * Math.sin(WEATHER.clock * 0.77 + gameTime * 0.006 + 2.4);
+  const targetRain = weatherSmooth(0.48, 0.92, front) * weatherSmooth(0.32, 1.0, front2);
+  const targetStorm = weatherSmooth(0.72, 0.98, front) * weatherSmooth(0.68, 1.0, front2);
+  const night = (Math.cos((WEATHER.clock - 12) * Math.PI / 12) + 1) * 0.5;
+  const daylight = 1 - night;
+
+  WEATHER.rain = weatherLerp(WEATHER.rain, targetRain * 0.82, 1 - Math.exp(-dt * 0.08));
+  WEATHER.storm = weatherLerp(WEATHER.storm, targetStorm * 0.55, 1 - Math.exp(-dt * 0.05));
+  WEATHER.cloud = weatherLerp(WEATHER.cloud, 0.16 + WEATHER.rain * 0.72, 1 - Math.exp(-dt * 0.10));
+  WEATHER.wind = weatherLerp(WEATHER.wind, 0.16 + WEATHER.rain * 0.72 + WEATHER.storm * 0.34, 1 - Math.exp(-dt * 0.12));
+
+  /* Solar arc. The renderer's forward convention is -Z. */
+  const sunA = (WEATHER.clock / 24) * Math.PI * 2 - Math.PI * 0.5;
+  const sunY = Math.sin(sunA);
+  const sunX = Math.cos(sunA) * 0.72;
+  const sunZ = Math.sin(sunA + 1.25) * 0.42;
+  const sd = norm3([sunX, Math.max(-0.16, sunY), sunZ]);
+  SUN_DIR[0] = sd[0]; SUN_DIR[1] = sd[1]; SUN_DIR[2] = sd[2];
+
+  const warm = weatherSmooth(0, 1, Math.max(0, 1 - Math.abs(WEATHER.clock - 6) / 3));
+  const sunset = weatherSmooth(0, 1, Math.max(0, 1 - Math.abs(WEATHER.clock - 18) / 3));
+  const dawnDusk = Math.max(warm, sunset);
+
+  const daySun = [1.00, 0.95, 0.84];
+  const nightSun = [0.18, 0.27, 0.48];
+  const duskSun = [1.00, 0.46, 0.22];
+  for (let i = 0; i < 3; i++) {
+    const base = weatherLerp(nightSun[i], daySun[i], daylight);
+    SUN_COLOR[i] = weatherLerp(base, duskSun[i], dawnDusk * 0.72);
+    SUN_COLOR[i] *= (1 - WEATHER.storm * 0.48);
+  }
+
+  const skyDay = [0.24, 0.47, 0.80];
+  const skyNight = [0.012, 0.022, 0.055];
+  const horizonDay = [0.86, 0.89, 0.93];
+  const horizonNight = [0.055, 0.075, 0.13];
+  const groundDay = [0.56, 0.62, 0.66];
+  const groundNight = [0.045, 0.052, 0.075];
+
+  for (let i = 0; i < 3; i++) {
+    SKY_TOP[i] = weatherLerp(skyNight[i], skyDay[i], daylight);
+    SKY_HORIZON[i] = weatherLerp(horizonNight[i], horizonDay[i], daylight);
+    SKY_GROUND[i] = weatherLerp(groundNight[i], groundDay[i], daylight);
+    const cloudDark = WEATHER.cloud * 0.42 + WEATHER.storm * 0.22;
+    SKY_TOP[i] *= 1 - cloudDark;
+    SKY_HORIZON[i] *= 1 - cloudDark * 0.72;
+    SKY_GROUND[i] *= 1 - cloudDark * 0.52;
+  }
+
+  const fogBase = weatherLerp(0.82, 0.45, night);
+  const rainFog = WEATHER.rain * 0.26 + WEATHER.storm * 0.20;
+  FOG_COLOR[0] = weatherLerp(SKY_HORIZON[0], 0.50, rainFog);
+  FOG_COLOR[1] = weatherLerp(SKY_HORIZON[1], 0.58, rainFog);
+  FOG_COLOR[2] = weatherLerp(SKY_HORIZON[2], 0.68, rainFog);
+  FOG_NEAR = weatherLerp(600, 260, WEATHER.rain + WEATHER.storm * 0.35);
+  FOG_FAR = weatherLerp(1300, 720, WEATHER.rain + WEATHER.storm * 0.45);
+
+  WEATHER.mode = WEATHER.storm > 0.42 ? 'storm' : WEATHER.rain > 0.28 ? 'rain' : 'clear';
+
+  if (WEATHER.storm > 0.50 && WEATHER.lightningCooldown <= 0 && Math.random() < dt * 0.018) {
+    WEATHER.lightning = 1;
+    WEATHER.lightningTimer = 0.10 + Math.random() * 0.10;
+    WEATHER.lightningCooldown = 7 + Math.random() * 13;
+  }
+  WEATHER.lightningCooldown -= dt;
+  WEATHER.lightning = Math.max(0, WEATHER.lightningTimer > 0 ? WEATHER.lightning : 0);
+  WEATHER.lightningTimer -= dt;
+  if (WEATHER.lightningTimer <= 0) WEATHER.lightning = 0;
+}
 
 /* =========================================================================
    GAME STATE
@@ -1375,11 +1478,20 @@ function crash() {
   showMessage('CRASHED  +$' + reward, 1500);
 }
 
+/* Public read-only-ish bridge for the optional VFX module. */
+globalThis.SkyCubeWeather = WEATHER;
+globalThis.SkyCubeFlight = {
+  get plane() { return plane; },
+  get camera() { return camPos; },
+  get time() { return gameTime; }
+};
+
 /* =========================================================================
    UPDATE
    ========================================================================= */
 function update(dt) {
   gameTime += dt;
+  updateWeather(dt);
 
   if (shopOpen) return;
 
@@ -1585,6 +1697,7 @@ function render() {
   gl.uniform3fv(skyU.uSkyTop, SKY_TOP);
   gl.uniform3fv(skyU.uSkyHorizon, SKY_HORIZON);
   gl.uniform3fv(skyU.uGroundColor, SKY_GROUND);
+  gl.uniform1f(skyU.uLightning, WEATHER.lightning);
   gl.bindVertexArray(skyMesh.vao);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
   gl.enable(gl.DEPTH_TEST);
