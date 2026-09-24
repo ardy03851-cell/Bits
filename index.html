@@ -1,406 +1,1121 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="utf-8">
-<meta name="viewport"
-  content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>SkyCube — Infinite Flight</title>
-<style>
-/* =========================================================================
-   SkyCube UI — index.html only provides a canvas and the CSS design system.
-   graphics.js builds every UI element dynamically. Every UI texture is
-   optional; when a texture is missing the fallback styles below take over.
-
-   Style: flat, low-contrast, no glows. White on a dark scrim so it stays
-   readable over sky without shouting.
+  <meta charset="utf-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Skying simulator Block</title>
+  <style>
+    /* =========================================================================
+   SkyCube UI — v3
+   · small, distant crosshair that rolls with the aircraft
+   · sector "title card" HUD (indie-game style) on the left
+   · instrument sheet on the right (parsed from the old #stats)
+   · text animations: scramble-decode, slide-flash, boot-in
    ========================================================================= */
 
-:root {
-  /* Layout */
-  --stick-size:      140px;
-  --stick-margin:    24px;
-  --ui-gap:          12px;
-  --throttle-w:      56px;
-  --throttle-h:      170px;
-  --throttle-top:    32px;
+    :root {
+      /* ---- layout ---- */
+      --stick-size: 150px;
+      --stick-margin: 26px;
+      --ui-gap: 14px;
+      --throttle-w: 64px;
+      --throttle-h: 186px;
+      --throttle-top: 0px;
 
-  /* Safe areas */
-  --safe-l: env(safe-area-inset-left, 0px);
-  --safe-r: env(safe-area-inset-right, 0px);
-  --safe-b: env(safe-area-inset-bottom, 0px);
-  --safe-t: env(safe-area-inset-top, 0px);
+      /* ---- safe areas ---- */
+      --safe-l: env(safe-area-inset-left, 0px);
+      --safe-r: env(safe-area-inset-right, 0px);
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-t: env(safe-area-inset-top, 0px);
 
-  /* Palette */
-  --panel:  rgba(0, 0, 0, 0.35);
-  --line:   rgba(255, 255, 255, 0.25);
-  --line-2: rgba(255, 255, 255, 0.55);
-  --text:   #ffffff;
-  --muted:  rgba(255, 255, 255, 0.7);
+      /* ---- palette (sampled from the terrain shader) ---- */
+      --sand: #e6dcc2;
+      --sand-dim: #a89a7a;
+      --stone: #6b6350;
+      --moss: #6b7a3a;
+      --ember: #c9832f;
+      --ember-hi: #e8b45a;
+      --ink: #14110c;
+      --ink-soft: #241d13;
 
-  /* UI texture slots — set by JS when a file loads. */
-  --ui-stick-base:              none;
-  --ui-stick-base-active:       none;
-  --ui-stick-knob:              none;
-  --ui-stick-knob-active:       none;
-  --ui-throttle-track:          none;
-  --ui-throttle-fill:           none;
-  --ui-throttle-handle:         none;
-  --ui-throttle-handle-active:  none;
-  --ui-throttle-frame:          none;
-  --ui-throttle-label:          none;
-  --ui-crosshair:               none;
-  --ui-hud-panel:               none;
-  --ui-hud-corner:              none;
-  --ui-btn-frame:               none;
-  --ui-btn-frame-active:        none;
-}
+      --panel-bg: rgba(20, 17, 12, 0.74);
+      --line: rgba(230, 220, 194, 0.20);
+      --line-2: rgba(230, 220, 194, 0.55);
+      --text: var(--sand);
+      --muted: rgba(230, 220, 194, 0.62);
 
-* { box-sizing: border-box; }
+      /* ---- grain overlay ---- */
+      --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='0.72' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='180' height='180' filter='url(%23g)' opacity='0.22'/></svg>");
 
-html, body {
-  margin: 0; padding: 0;
-  height: 100%; width: 100%;
-  overflow: hidden;
-  background: #89a7c4;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  -webkit-user-select: none; user-select: none;
-  -webkit-touch-callout: none;
-  touch-action: none;
-  overscroll-behavior: none;
-}
+      /* ---- UI texture slots (set by graphics.js) ---- */
+      --ui-stick-base: none;
+      --ui-stick-base-active: none;
+      --ui-stick-knob: none;
+      --ui-stick-knob-active: none;
+      --ui-throttle-track: none;
+      --ui-throttle-fill: none;
+      --ui-throttle-handle: none;
+      --ui-throttle-handle-active: none;
+      --ui-throttle-frame: none;
+      --ui-throttle-label: none;
+      --ui-crosshair: none;
+      --ui-hud-panel: none;
+      --ui-hud-corner: none;
+      --ui-btn-frame: none;
+      --ui-btn-frame-active: none;
+    }
 
-#glcanvas {
-  position: fixed; inset: 0;
-  display: block;
-  width: 100%; height: 100%;
-  touch-action: none;
-}
+    * {
+      box-sizing: border-box;
+    }
 
-/* =========================================================================
-   HUD — stats, key hints, biome readout
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      background: #89a7c4;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      color: var(--text);
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+
+    #glcanvas {
+      position: fixed;
+      inset: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    /* =========================================================================
+   HUD PANELS (shared)
    ========================================================================= */
-.hud-panel {
-  padding: 8px 12px;
-  border-radius: 6px;
-  background-color: var(--panel);
-  background-image: var(--ui-hud-panel, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  border: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
-  pointer-events: none;
-}
+    .hud-panel {
+      position: relative;
+      padding: 9px 13px;
+      border-radius: 2px;
+      color: var(--muted);
+      font-size: 11.5px;
+      line-height: 1.6;
+      letter-spacing: 0.045em;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+      pointer-events: none;
 
-.hud-panel.textured {
-  border-color: transparent;
-  background-color: transparent;
-  text-shadow: none;
-}
+      background-color: var(--panel-bg);
+      background-image: var(--ui-hud-panel, none), var(--grain);
+      background-size: 100% 100%, 180px 180px;
+      background-repeat: no-repeat, repeat;
+      border: 1px solid var(--line);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        0 2px 10px rgba(0, 0, 0, 0.35);
+    }
 
-#hud {
-  position: fixed;
-  left: calc(16px + var(--safe-l));
-  top: calc(16px + var(--safe-t));
-}
+    .hud-panel::before,
+    .hud-panel::after {
+      content: '';
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      border: 1px solid var(--line-2);
+      pointer-events: none;
+    }
 
-#hud b { color: var(--text); font-weight: 600; }
+    .hud-panel::before {
+      top: -1px;
+      left: -1px;
+      border-right: 0;
+      border-bottom: 0;
+    }
 
-#stats {
-  position: fixed;
-  right: calc(16px + var(--safe-r));
-  top: calc(16px + var(--safe-t));
-  text-align: right;
-  white-space: nowrap;
-}
+    .hud-panel::after {
+      bottom: -1px;
+      right: -1px;
+      border-left: 0;
+      border-top: 0;
+    }
 
-#stats b { color: var(--text); font-weight: 600; }
+    .hud-panel.textured {
+      border-color: transparent;
+      background-color: transparent;
+      background-image: var(--ui-hud-panel);
+      background-size: 100% 100%;
+      background-repeat: no-repeat;
+      box-shadow: none;
+      text-shadow: none;
+    }
 
-body.is-touch #hudKeys,
-body.is-touch #hudKeys2 { display: none; }
+    .hud-panel.textured::before,
+    .hud-panel.textured::after {
+      display: none;
+    }
 
-/* =========================================================================
-   CROSSHAIR
+    /* keyboard-hint strip — bottom-left, muted */
+    #hud {
+      position: fixed;
+      left: calc(20px + var(--safe-l));
+      bottom: calc(20px + var(--safe-b));
+      top: auto;
+      font-size: 10.5px;
+      letter-spacing: 0.09em;
+      opacity: 0.68;
+    }
+
+    #hud b {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    body.is-touch #hud {
+      display: none;
+    }
+
+    /* original #stats becomes a data source only */
+    #stats {
+      display: none !important;
+    }
+
+    /* =========================================================================
+   CROSSHAIR — small, distant, holographic
    ========================================================================= */
-#crosshair {
-  position: fixed;
-  left: 50%; top: 50%;
-  width: 18px; height: 18px;
-  margin: -9px 0 0 -9px;
-  pointer-events: none;
-  opacity: 0.5;
-}
-#crosshair::before,
-#crosshair::after {
-  content: '';
-  position: absolute;
-  background: #fff;
-}
-#crosshair::before { left: 8px; top: 0; width: 1px; height: 18px; }
-#crosshair::after  { left: 0; top: 8px; width: 18px; height: 1px; }
+    #crosshair {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: 20px;
+      height: 20px;
+      margin: -10px 0 0 -10px;
+      pointer-events: none;
+      opacity: 0.72;
+      will-change: transform;
+      transform-origin: 50% 50%;
+      border-radius: 50%;
+      border: 1px solid rgba(230, 220, 194, 0.45);
+      background-image: radial-gradient(circle at 50% 50%,
+          rgba(255, 246, 220, 1) 0 1px,
+          transparent 1.6px);
+      background-repeat: no-repeat;
+      background-position: center;
+      /* dark contrast shadow + warm holographic bloom = "far away" */
+      filter:
+        drop-shadow(0 0 1px rgba(0, 0, 0, 0.75)) drop-shadow(0 0 3px rgba(255, 200, 120, 0.28)) blur(0.2px);
+    }
 
-#crosshair.textured {
-  width: 40px; height: 40px;
-  margin: -20px 0 0 -20px;
-  background-image: var(--ui-crosshair);
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-  opacity: 0.7;
-}
-#crosshair.textured::before,
-#crosshair.textured::after { display: none; }
+    #crosshair::before,
+    #crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(230, 220, 194, 0.55);
+    }
 
-/* =========================================================================
-   CENTER MESSAGE
+    /* top + bottom ticks (short, inward) */
+    #crosshair::before {
+      left: 50%;
+      top: 2px;
+      width: 1px;
+      height: 3px;
+      margin-left: -0.5px;
+      box-shadow: 0 12px 0 rgba(230, 220, 194, 0.55);
+    }
+
+    /* left + right ticks */
+    #crosshair::after {
+      top: 50%;
+      left: 2px;
+      width: 3px;
+      height: 1px;
+      margin-top: -0.5px;
+      box-shadow: 12px 0 0 rgba(230, 220, 194, 0.55);
+    }
+
+    #crosshair.textured {
+      width: 40px;
+      height: 40px;
+      margin: -20px 0 0 -20px;
+      background-image: var(--ui-crosshair);
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      border-radius: 0;
+      border: 0;
+      filter: none;
+      opacity: 0.85;
+    }
+
+    #crosshair.textured::before,
+    #crosshair.textured::after {
+      display: none;
+    }
+
+    /* =========================================================================
+   NEW HUD — sector title + instrument sheet
    ========================================================================= */
-#msg {
-  position: fixed;
-  left: 50%; top: 42%;
-  transform: translate(-50%, -50%);
-  color: #fff;
-  font-size: 26px;
-  font-weight: 600;
-  letter-spacing: 1px;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.25s;
-}
+    #sky-hud {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+      opacity: 0;
+      animation: hud-boot 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 0.15s forwards;
+    }
 
-/* =========================================================================
-   TOUCH UI — sticks + throttle
+    @keyframes hud-boot {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    /* ---- sector title (top-left) ---- */
+    #biome-block {
+      position: absolute;
+      left: calc(24px + var(--safe-l));
+      top: calc(22px + var(--safe-t));
+      pointer-events: none;
+      opacity: 0;
+      animation: block-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s forwards;
+    }
+
+    @keyframes block-in {
+      from {
+        opacity: 0;
+        transform: translateY(-10px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    #biome-title {
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 0.32em;
+      color: var(--sand);
+      line-height: 1.1;
+      text-shadow:
+        0 2px 10px rgba(0, 0, 0, 0.85),
+        0 0 2px rgba(0, 0, 0, 0.9);
+      white-space: nowrap;
+    }
+
+    #biome-title.enter {
+      animation: biome-flash 0.55s cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    @keyframes biome-flash {
+      0% {
+        color: #fff8e2;
+        letter-spacing: 0.46em;
+        filter: blur(0);
+      }
+
+      35% {
+        color: #fff8e2;
+        letter-spacing: 0.32em;
+      }
+
+      100% {
+        color: var(--sand);
+        letter-spacing: 0.32em;
+        filter: blur(0);
+      }
+    }
+
+    #biome-rule {
+      height: 1px;
+      width: 46px;
+      margin: 8px 0 6px;
+      background: linear-gradient(to right,
+          var(--line-2) 0%,
+          rgba(230, 220, 194, 0.05) 100%);
+    }
+
+    #biome-sub {
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: var(--muted);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    /* ---- instrument sheet (top-right) ---- */
+    #stat-block {
+      position: absolute;
+      right: calc(22px + var(--safe-r));
+      top: calc(22px + var(--safe-t));
+      min-width: 176px;
+      padding: 10px 12px 9px;
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      background-color: var(--panel-bg);
+      background-image: var(--grain);
+      background-size: 180px 180px;
+      background-repeat: repeat;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.05),
+        0 2px 10px rgba(0, 0, 0, 0.4);
+      pointer-events: none;
+      opacity: 0;
+      animation: block-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) 0.35s forwards;
+    }
+
+    #stat-block::before,
+    #stat-block::after {
+      content: '';
+      position: absolute;
+      width: 6px;
+      height: 6px;
+      border: 1px solid var(--line-2);
+    }
+
+    #stat-block::before {
+      top: -1px;
+      left: -1px;
+      border-right: 0;
+      border-bottom: 0;
+    }
+
+    #stat-block::after {
+      bottom: -1px;
+      right: -1px;
+      border-left: 0;
+      border-top: 0;
+    }
+
+    #stat-sheet-label {
+      font-size: 9px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 7px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #stat-sheet-label .dot {
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--moss);
+      box-shadow: 0 0 4px rgba(107, 122, 58, 0.7);
+      animation: dot-pulse 2.6s ease-in-out infinite;
+    }
+
+    @keyframes dot-pulse {
+
+      0%,
+      100% {
+        opacity: 0.55;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    .stat-row {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      align-items: baseline;
+      column-gap: 10px;
+      padding: 3px 0;
+      border-bottom: 1px dashed rgba(230, 220, 194, 0.08);
+    }
+
+    .stat-row:last-child {
+      border-bottom: 0;
+      padding-bottom: 0;
+    }
+
+    .stat-label {
+      font-size: 9.5px;
+      letter-spacing: 0.22em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .stat-value {
+      display: flex;
+      justify-content: flex-end;
+      align-items: baseline;
+      gap: 5px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stat-value .num {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--sand);
+      letter-spacing: 0.03em;
+      display: inline-block;
+      will-change: transform, opacity, color;
+    }
+
+    .stat-value .unit {
+      font-size: 9.5px;
+      letter-spacing: 0.14em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    /* value tick: slide + flash */
+    .stat-row.tick .num {
+      animation: value-tick 0.42s cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
+
+    @keyframes value-tick {
+      0% {
+        transform: translateY(-7px);
+        opacity: 0.25;
+        color: #fff8e2;
+      }
+
+      45% {
+        transform: translateY(0);
+        opacity: 1;
+        color: #fff8e2;
+      }
+
+      100% {
+        transform: translateY(0);
+        opacity: 1;
+        color: var(--sand);
+      }
+    }
+
+    /* throttle gets its own accent */
+    .stat-row[data-key="THR"] .num {
+      color: var(--ember-hi);
+    }
+
+    .stat-row[data-key="THR"].tick .num {
+      animation: value-tick 0.42s cubic-bezier(0.2, 0.7, 0.2, 1),
+        ember-flash 0.42s ease-out;
+    }
+
+    @keyframes ember-flash {
+      0% {
+        text-shadow: 0 0 12px rgba(232, 180, 90, 0.9);
+      }
+
+      100% {
+        text-shadow: none;
+      }
+    }
+
+    /* =========================================================================
+   CENTRE MESSAGE — punchy scramble-friendly entrance
    ========================================================================= */
-#touchUI { display: none; }
-body.is-touch #touchUI { display: block; }
-body.is-touch #resetBtn { display: block; }
+    #msg {
+      position: fixed;
+      left: 50%;
+      top: 42%;
+      transform: translate(-50%, -50%);
+      color: var(--sand);
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      text-shadow:
+        0 2px 12px rgba(0, 0, 0, 0.9),
+        0 0 2px rgba(0, 0, 0, 0.9);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.35s;
+    }
 
-/* ---- Sticks ---- */
-.stick {
-  position: fixed;
-  width: var(--stick-size);
-  height: var(--stick-size);
-  pointer-events: none;
-  z-index: 10;
-}
-#leftStick {
-  left:   calc(var(--stick-margin) + var(--safe-l));
-  bottom: calc(var(--stick-margin) + var(--safe-b));
-}
-#rightStick {
-  right:  calc(var(--stick-margin) + var(--safe-r));
-  bottom: calc(var(--stick-margin) + var(--safe-b));
-}
+    #msg.show {
+      animation: msg-show 0.55s cubic-bezier(0.2, 0.7, 0.2, 1);
+    }
 
-.stick-base {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-  background-color: rgba(0, 0, 0, 0.15);
-  background-image: var(--ui-stick-base, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  transition: border-color 0.15s, background-color 0.15s;
-}
+    @keyframes msg-show {
+      0% {
+        letter-spacing: 0.55em;
+        filter: blur(6px);
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.96);
+      }
 
-.stick.active .stick-base {
-  border-color: var(--line-2);
-  background-color: rgba(0, 0, 0, 0.25);
-  background-image: var(--ui-stick-base-active, var(--ui-stick-base, none));
-}
+      100% {
+        letter-spacing: 0.22em;
+        filter: blur(0);
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
 
-.knob {
-  position: absolute;
-  left: 50%; top: 50%;
-  width: 54px; height: 54px;
-  margin: -27px 0 0 -27px;
-  border-radius: 50%;
-  background-color: rgba(255, 255, 255, 0.8);
-  background-image: var(--ui-stick-knob, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  will-change: transform;
-  pointer-events: none;
-  transition: background-color 0.15s;
-}
-.stick.active .knob {
-  background-color: rgba(255, 255, 255, 1);
-  background-image: var(--ui-stick-knob-active, var(--ui-stick-knob, none));
-}
+    /* =========================================================================
+   TOUCH UI
+   ========================================================================= */
+    #touchUI {
+      display: none;
+    }
 
-.stickLabel {
-  position: absolute;
-  left: 50%; bottom: -20px;
-  transform: translateX(-50%);
-  color: var(--muted);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-  white-space: nowrap;
-}
+    body.is-touch #touchUI {
+      display: block;
+    }
 
-/* ---- Throttle ---- */
-#throttle {
-  position: fixed;
-  right: calc(
-    var(--stick-margin) + var(--safe-r)
-    + (var(--stick-size) - var(--throttle-w)) / 2
-  );
-  bottom: calc(
-    var(--stick-margin) + var(--safe-b)
-    + var(--stick-size) + var(--ui-gap)
-  );
-  width: var(--throttle-w);
-  height: var(--throttle-h);
-  pointer-events: auto;
-  touch-action: none;
-  user-select: none;
-  z-index: 11;
-}
+    body.is-touch #resetBtn {
+      display: block;
+    }
 
-.throttle-track {
-  position: absolute;
-  left: 50%;
-  top: var(--throttle-top);
-  bottom: 0;
-  width: 8px;
-  margin-left: -4px;
-  border-radius: 4px;
-  background-color: rgba(0, 0, 0, 0.4);
-  background-image: var(--ui-throttle-track, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  border: 1px solid var(--line);
-}
+    /* ---- sticks ---- */
+    .stick {
+      position: fixed;
+      width: var(--stick-size);
+      height: var(--stick-size);
+      pointer-events: none;
+      z-index: 10;
+      filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.45));
+    }
 
-.throttle-fill {
-  position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 0%;
-  border-radius: 4px;
-  background-color: rgba(255, 255, 255, 0.85);
-  background-image: var(--ui-throttle-fill, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  pointer-events: none;
-}
+    #leftStick {
+      left: calc(var(--stick-margin) + var(--safe-l));
+      bottom: calc(var(--stick-margin) + var(--safe-b));
+    }
 
-.throttle-handle {
-  position: absolute;
-  left: 50%;
-  bottom: 0%;
-  width: 28px;
-  height: 28px;
-  transform: translate(-50%, 50%);
-  border-radius: 50%;
-  background-color: #fff;
-  background-image: var(--ui-throttle-handle, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  pointer-events: none;
-  will-change: bottom;
-}
-#throttle.active .throttle-handle {
-  background-image: var(--ui-throttle-handle-active, var(--ui-throttle-handle, none));
-}
+    #rightStick {
+      right: calc(var(--stick-margin) + var(--safe-r));
+      bottom: calc(var(--stick-margin) + var(--safe-b));
+    }
 
-.throttle-frame {
-  position: absolute;
-  left: 50%;
-  top: calc(var(--throttle-top) - 12px);
-  bottom: -14px;
-  width: calc(var(--throttle-w) + 16px);
-  margin-left: calc((var(--throttle-w) + 16px) / -2);
-  background-image: var(--ui-throttle-frame, none);
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  pointer-events: none;
-}
+    .stick-base {
+      position: absolute;
+      inset: 0;
+      border-radius: 50%;
+      border: 1px solid var(--line-2);
+      background-color: rgba(20, 17, 12, 0.38);
+      background-image: var(--ui-stick-base, none), var(--grain);
+      background-size: 100% 100%, 180px 180px;
+      background-repeat: no-repeat, repeat;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        inset 0 -8px 20px rgba(0, 0, 0, 0.5),
+        inset 0 8px 20px rgba(0, 0, 0, 0.32);
+      transition: border-color 0.15s, background-color 0.15s;
+    }
 
-.throttle-label {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-  white-space: nowrap;
-  pointer-events: none;
-}
-.throttle-label.textured {
-  width: var(--throttle-w);
-  height: 16px;
-  font-size: 0;
-  color: transparent;
-  text-shadow: none;
-  background-image: var(--ui-throttle-label);
-  background-size: contain;
-  background-repeat: no-repeat;
-  background-position: center;
-}
+    .stick.active .stick-base {
+      border-color: var(--sand);
+      background-color: rgba(20, 17, 12, 0.55);
+      background-image: var(--ui-stick-base-active, var(--ui-stick-base, none)), var(--grain);
+    }
 
-/* =========================================================================
+    .knob {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 54px;
+      height: 54px;
+      margin: -27px 0 0 -27px;
+      border-radius: 50%;
+      background-color: var(--sand-dim);
+      background-image:
+        var(--ui-stick-knob, none),
+        radial-gradient(circle at 50% 32%, #f2e9d2 0%, #b8a980 48%, #6a6146 100%);
+      background-size: 100% 100%, 100% 100%;
+      background-repeat: no-repeat, no-repeat;
+      border: 1px solid rgba(20, 17, 12, 0.65);
+      box-shadow:
+        0 2px 6px rgba(0, 0, 0, 0.55),
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        inset 0 -3px 6px rgba(0, 0, 0, 0.35);
+      will-change: transform;
+      pointer-events: none;
+      transition: box-shadow 0.15s;
+    }
+
+    .stick.active .knob {
+      background-image:
+        var(--ui-stick-knob-active, var(--ui-stick-knob, none)),
+        radial-gradient(circle at 50% 32%, #fff8e2 0%, #d4c396 48%, #7a7050 100%);
+      box-shadow:
+        0 2px 8px rgba(0, 0, 0, 0.6),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5),
+        inset 0 -3px 6px rgba(0, 0, 0, 0.4);
+    }
+
+    .stickLabel {
+      position: absolute;
+      left: 50%;
+      bottom: -22px;
+      transform: translateX(-50%);
+      color: var(--muted);
+      font-size: 9.5px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+      white-space: nowrap;
+      opacity: 0.85;
+    }
+
+    /* ---- throttle ---- */
+    #throttle {
+      position: fixed;
+      right: calc(var(--stick-margin) + var(--safe-r) + (var(--stick-size) - var(--throttle-w)) / 2);
+      bottom: calc(var(--stick-margin) + var(--safe-b) + var(--stick-size) + var(--ui-gap));
+      width: var(--throttle-w);
+      height: var(--throttle-h);
+      pointer-events: auto;
+      touch-action: none;
+      user-select: none;
+      z-index: 11;
+    }
+
+    .throttle-frame {
+      position: absolute;
+      left: 50%;
+      top: -14px;
+      bottom: -14px;
+      width: calc(var(--throttle-w) + 20px);
+      margin-left: calc((var(--throttle-w) + 20px) / -2);
+      background-image: var(--ui-throttle-frame, none);
+      background-size: 100% 100%;
+      background-repeat: no-repeat;
+      pointer-events: none;
+    }
+
+    .throttle-frame::before,
+    .throttle-frame::after {
+      content: '';
+      position: absolute;
+      left: 16px;
+      top: 14px;
+      bottom: 14px;
+      width: 14px;
+      pointer-events: none;
+    }
+
+    .throttle-frame::before {
+      background-image: repeating-linear-gradient(to bottom,
+          rgba(230, 220, 194, 0.50) 0 1px,
+          transparent 1px 10%);
+    }
+
+    .throttle-frame::after {
+      background-image: repeating-linear-gradient(to bottom,
+          rgba(230, 220, 194, 0.85) 0 2px,
+          transparent 2px 50%);
+    }
+
+    .throttle-track {
+      position: absolute;
+      left: 50%;
+      top: var(--throttle-top);
+      bottom: 0;
+      width: 12px;
+      margin-left: -6px;
+      border-radius: 6px;
+      background-color: rgba(0, 0, 0, 0.58);
+      background-image: var(--ui-throttle-track, none);
+      background-size: 100% 100%;
+      background-repeat: no-repeat;
+      border: 1px solid var(--line);
+      box-shadow:
+        inset 0 0 10px rgba(0, 0, 0, 0.85),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      overflow: hidden;
+    }
+
+    .throttle-fill {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 0%;
+      background-color: var(--ember);
+      background-image:
+        var(--ui-throttle-fill, none),
+        linear-gradient(to top,
+          #4a2a10 0%,
+          #8a5220 42%,
+          #c48a3c 78%,
+          #e0b060 100%);
+      background-size: 100% 100%, 100% 100%;
+      background-repeat: no-repeat, no-repeat;
+      pointer-events: none;
+      box-shadow: inset 0 1px 0 rgba(255, 220, 160, 0.35);
+    }
+
+    .throttle-handle {
+      position: absolute;
+      left: 50%;
+      bottom: 0%;
+      width: 48px;
+      height: 24px;
+      transform: translate(-50%, 50%);
+      border-radius: 5px;
+      background-color: #2e2820;
+      background-image:
+        var(--ui-throttle-handle, none),
+        linear-gradient(to bottom, #4a4234 0%, #2e2820 52%, #1a1610 100%);
+      background-size: 100% 100%, 100% 100%;
+      background-repeat: no-repeat, no-repeat;
+      border: 1px solid rgba(230, 220, 194, 0.42);
+      box-shadow:
+        0 2px 7px rgba(0, 0, 0, 0.7),
+        inset 0 1px 0 rgba(255, 255, 255, 0.14),
+        inset 0 -2px 4px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+      will-change: bottom;
+    }
+
+    .throttle-handle::before {
+      content: '';
+      position: absolute;
+      left: 6px;
+      right: 6px;
+      top: 4px;
+      bottom: 4px;
+      border-radius: 2px;
+      background-image: repeating-linear-gradient(to bottom,
+          rgba(230, 220, 194, 0.16) 0 1px,
+          transparent 1px 3px);
+      pointer-events: none;
+    }
+
+    #throttle.active .throttle-handle {
+      border-color: var(--sand);
+      background-image:
+        var(--ui-throttle-handle-active, var(--ui-throttle-handle, none)),
+        linear-gradient(to bottom, #5a5040 0%, #3a3228 52%, #221c14 100%);
+    }
+
+    .throttle-label {
+      position: absolute;
+      top: -26px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 9.5px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0.9;
+    }
+
+    .throttle-label.textured {
+      width: var(--throttle-w);
+      height: 16px;
+      font-size: 0;
+      color: transparent;
+      text-shadow: none;
+      background-image: var(--ui-throttle-label);
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+    }
+
+    /* =========================================================================
    RESPAWN BUTTON
    ========================================================================= */
-#resetBtn {
-  position: fixed;
-  right: calc(16px + var(--safe-r));
-  top: calc(84px + var(--safe-t));
-  padding: 8px 14px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--text);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  -webkit-tap-highlight-color: transparent;
-  touch-action: manipulation;
-  display: none;
-  cursor: pointer;
-}
-#resetBtn:active {
-  background: rgba(0, 0, 0, 0.55);
-  border-color: var(--line-2);
-}
+    #resetBtn {
+      position: fixed;
+      right: calc(16px + var(--safe-r));
+      top: calc(90px + var(--safe-t));
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text);
+      background-color: var(--panel-bg);
+      background-image: var(--grain);
+      background-size: 180px 180px;
+      background-repeat: repeat;
+      border: 1px solid var(--line);
+      border-radius: 2px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+      -webkit-tap-highlight-color: transparent;
+      touch-action: manipulation;
+      display: none;
+      cursor: pointer;
+    }
 
-#resetBtn.textured {
-  padding: 0 12px;
-  height: 44px;
-  line-height: 1;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  background: transparent;
-  border: 14px solid transparent;
-  border-radius: 0;
-  border-image-source: var(--ui-btn-frame, none);
-  border-image-slice: 14;
-  border-image-width: 14px;
-  border-image-repeat: stretch;
-  display: none;
-  align-items: center;
-  justify-content: center;
-}
-body.is-touch #resetBtn.textured { display: inline-flex; }
-#resetBtn.textured:active {
-  border-image-source: var(--ui-btn-frame-active, var(--ui-btn-frame, none));
-  background: rgba(0, 0, 0, 0.15);
-}
-</style>
+    #resetBtn:active {
+      background-color: rgba(20, 17, 12, 0.92);
+      border-color: var(--line-2);
+    }
+
+    #resetBtn.textured {
+      padding: 0 12px;
+      height: 44px;
+      line-height: 1;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      background: transparent;
+      border: 14px solid transparent;
+      border-radius: 0;
+      border-image-source: var(--ui-btn-frame, none);
+      border-image-slice: 14;
+      border-image-width: 14px;
+      border-image-repeat: stretch;
+      display: none;
+      align-items: center;
+      justify-content: center;
+    }
+
+    body.is-touch #resetBtn.textured {
+      display: inline-flex;
+    }
+
+    #resetBtn.textured:active {
+      border-image-source: var(--ui-btn-frame-active, var(--ui-btn-frame, none));
+      background: rgba(0, 0, 0, 0.15);
+    }
+  </style>
 </head>
+
 <body>
   <canvas id="glcanvas"></canvas>
   <script src="models.js"></script>
   <script src="graphics.js"></script>
+
+  <script>
+    /* =========================================================================
+     Post-graphics.js wiring
+       1. Roll-driven crosshair
+       2. Custom sector + instrument HUD (reads the old #stats element)
+       3. Punchy animation hooks for #msg
+     ========================================================================= */
+  (function () {
+    'use strict';
+
+    /* ---------------------------------------------------------------------
+       1. CROSSHAIR — smooth roll, tiny distance-scale
+       --------------------------------------------------------------------- */
+    (function crosshair() {
+      var el = document.getElementById('crosshair');
+      if (!el) return;
+
+      var smoothed = 0;
+      var last = performance.now();
+
+      function readRoll() {
+        var q;
+        try { q = plane.q; } catch (e) { return 0; }
+        if (!q || q.length < 4) return 0;
+        /* right vector = q * [1,0,0] * q^-1 ; its .y is 2*(w*z + x*y).
+           Negate so that rolling right produces a positive angle. */
+        var ry = 2 * (q[3] * q[2] + q[0] * q[1]);
+        if (ry >  1) ry =  1;
+        if (ry < -1) ry = -1;
+        return -Math.asin(ry);
+      }
+      function readSpeed() {
+        try { return plane.speed || 0; } catch (e) { return 0; }
+      }
+
+      function frame(now) {
+        requestAnimationFrame(frame);
+        var dt = (now - last) / 1000; last = now;
+        if (dt > 0.1) dt = 0.1; else if (dt < 0) dt = 0;
+
+        var k = 1 - Math.exp(-15 * dt);
+        smoothed += (readRoll() - smoothed) * k;
+
+        var deg = smoothed * 180 / Math.PI;
+
+        /* 0.94 at rest → 1.05 flat out. Stays small — the point is
+           distance, not presence. */
+        var sp = readSpeed();
+        var t = Math.max(0, Math.min(1, (sp - 20) / 155));
+        var scale = 0.94 + t * 0.11;
+
+        el.style.transform =
+          'rotate(' + deg.toFixed(2) + 'deg) scale(' + scale.toFixed(3) + ')';
+      }
+      requestAnimationFrame(frame);
+    })();
+
+    /* ---------------------------------------------------------------------
+       2. HUD — replace the graphics.js #stats with a sector title card
+          and an instrument sheet. The original element stays in the DOM
+          (hidden) as the data source.
+       --------------------------------------------------------------------- */
+    (function hud() {
+      var src = document.getElementById('stats');
+      if (!src) return;
+
+      var root = document.createElement('div');
+      root.id = 'sky-hud';
+      root.innerHTML =
+        '<div id="biome-block">' +
+          '<div id="biome-title">—</div>' +
+          '<div id="biome-rule"></div>' +
+          '<div id="biome-sub">—</div>' +
+        '</div>' +
+        '<div id="stat-block">' +
+          '<div id="stat-sheet-label">' +
+            '<span>FLIGHT DATA</span>' +
+            '<span class="dot"></span>' +
+          '</div>' +
+          row('ALT', 'm') +
+          row('SPD', 'km/h') +
+          row('THR', '%') +
+          row('HDG', '°') +
+        '</div>';
+      document.body.appendChild(root);
+
+      function row(key, unit) {
+        return '<div class="stat-row" data-key="' + key + '">' +
+                 '<span class="stat-label">' + key + '</span>' +
+                 '<span class="stat-value">' +
+                   '<span class="num">0</span>' +
+                   '<span class="unit">' + unit + '</span>' +
+                 '</span>' +
+               '</div>';
+      }
+
+      var titleEl = root.querySelector('#biome-title');
+      var subEl   = root.querySelector('#biome-sub');
+
+      var rows = {};
+      var rowEls = root.querySelectorAll('.stat-row');
+      for (var i = 0; i < rowEls.length; i++) {
+        rows[rowEls[i].getAttribute('data-key')] = {
+          root: rowEls[i],
+          num: rowEls[i].querySelector('.num'),
+          unit: rowEls[i].querySelector('.unit')
+        };
+      }
+
+      var cache = {};
+
+      /* --- parse "ALT 123 m<br>SPD 45 km/h<br>..." --- */
+      function parseStats(html) {
+        var out = {};
+        var lines = String(html).split(/<br\s*\/?>/i);
+        for (var i = 0; i < lines.length; i++) {
+          var line = lines[i].replace(/<[^>]+>/g, '').trim();
+          if (!line) continue;
+          var sp = line.indexOf(' ');
+          if (sp < 0) continue;
+          out[line.slice(0, sp)] = line.slice(sp + 1);
+        }
+        return out;
+      }
+
+      function splitNumUnit(v) {
+        var m = String(v).match(/^([-+]?[0-9]*\.?[0-9]+)\s*(.*)$/);
+        return m ? { num: m[1], unit: m[2] } : { num: v, unit: '' };
+      }
+
+      /* --- scramble-decode for the biome title --- */
+      var CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      function scrambleTo(el, target, ms) {
+        if (el._scrambleRaf) cancelAnimationFrame(el._scrambleRaf);
+        var start = performance.now();
+        var len = target.length;
+        function step(now) {
+          var t = Math.min(1, (now - start) / ms);
+          var reveal = Math.floor(t * len);
+          var out = '';
+          for (var i = 0; i < len; i++) {
+            var c = target[i];
+            if (c === ' ' || c === '·' || c === '/') out += c;
+            else if (i < reveal) out += c;
+            else out += CHARS[(Math.random() * CHARS.length) | 0];
+          }
+          el.textContent = out;
+          if (t < 1) el._scrambleRaf = requestAnimationFrame(step);
+          else el.textContent = target;
+        }
+        el._scrambleRaf = requestAnimationFrame(step);
+      }
+
+      function tickRow(r) {
+        r.root.classList.remove('tick');
+        /* force reflow so the animation restarts cleanly */
+        void r.root.offsetWidth;
+        r.root.classList.add('tick');
+      }
+
+      function update() {
+        var data = parseStats(src.innerHTML);
+
+        /* biome */
+        if (data.BIOME && cache.BIOME !== data.BIOME) {
+          cache.BIOME = data.BIOME;
+          scrambleTo(titleEl, data.BIOME, 420);
+          titleEl.classList.remove('enter');
+          void titleEl.offsetWidth;
+          titleEl.classList.add('enter');
+        }
+
+        /* coordinates (subtle, changes every HUD tick) */
+        try {
+          var x = Math.round(plane.pos[0]);
+          var z = Math.round(plane.pos[2]);
+          var next = 'X ' + x + '  ·  Z ' + z;
+          if (subEl.textContent !== next) subEl.textContent = next;
+        } catch (e) { /* plane not ready yet */ }
+
+        /* numeric rows */
+        ['ALT', 'SPD', 'THR', 'HDG'].forEach(function (key) {
+          var raw = data[key];
+          if (raw == null) return;
+          if (cache[key] === raw) return;
+          cache[key] = raw;
+          var r = rows[key];
+          if (!r) return;
+          var p = splitNumUnit(raw);
+          r.num.textContent = p.num;
+          if (p.unit && r.unit.textContent.toLowerCase() !== p.unit.toLowerCase()) {
+            r.unit.textContent = p.unit;
+          }
+          tickRow(r);
+        });
+      }
+
+      update();
+      new MutationObserver(update).observe(src, {
+        childList: true, characterData: true, subtree: true
+      });
+    })();
+
+    /* ---------------------------------------------------------------------
+       3. #msg — punch the message in whenever graphics.js shows it
+       --------------------------------------------------------------------- */
+    (function msg() {
+      var el = document.getElementById('msg');
+      if (!el) return;
+      new MutationObserver(function () {
+        if (el.style.opacity === '1') {
+          el.classList.remove('show');
+          void el.offsetWidth;
+          el.classList.add('show');
+        }
+      }).observe(el, { attributes: true, attributeFilter: ['style'] });
+    })();
+
+  })();
+  </script>
 </body>
+
 </html>
