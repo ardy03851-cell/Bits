@@ -13,22 +13,32 @@
    SkyCube UI — index.html only provides a canvas and the CSS design system.
    graphics.js builds every UI element dynamically. Every UI texture is
    optional; when a texture is missing the fallback styles below take over.
+
+   Style: flat, low-contrast, no glows. White on a dark scrim so it stays
+   readable over sky without shouting.
    ========================================================================= */
 
 :root {
   /* Layout */
-  --stick-size:      150px;
-  --stick-margin:    28px;
+  --stick-size:      140px;
+  --stick-margin:    24px;
   --ui-gap:          12px;
-  --throttle-w:      64px;
-  --throttle-h:      180px;
-  --throttle-top:    38px;   /* where the track begins inside #throttle */
+  --throttle-w:      56px;
+  --throttle-h:      170px;
+  --throttle-top:    32px;
 
   /* Safe areas */
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
+
+  /* Palette */
+  --panel:  rgba(0, 0, 0, 0.35);
+  --line:   rgba(255, 255, 255, 0.25);
+  --line-2: rgba(255, 255, 255, 0.55);
+  --text:   #ffffff;
+  --muted:  rgba(255, 255, 255, 0.7);
 
   /* UI texture slots — set by JS when a file loads. */
   --ui-stick-base:              none;
@@ -55,7 +65,7 @@ html, body {
   height: 100%; width: 100%;
   overflow: hidden;
   background: #89a7c4;
-  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-user-select: none; user-select: none;
   -webkit-touch-callout: none;
   touch-action: none;
@@ -73,28 +83,24 @@ html, body {
    HUD — stats, key hints, biome readout
    ========================================================================= */
 .hud-panel {
-  padding: 10px 14px;
-  border-radius: 8px;
-  background-color: rgba(10, 22, 38, 0.42);
+  padding: 8px 12px;
+  border-radius: 6px;
+  background-color: var(--panel);
   background-image: var(--ui-hud-panel, none);
   background-size: 100% 100%;
   background-repeat: no-repeat;
-  border: 1px solid rgba(120, 200, 255, 0.28);
-  box-shadow:
-    0 2px 12px rgba(0, 0, 0, 0.35),
-    inset 0 0 20px rgba(40, 90, 140, 0.12);
-  color: #f2f7ff;
+  border: 1px solid var(--line);
+  color: var(--muted);
   font-size: 12px;
-  line-height: 1.55;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+  line-height: 1.5;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
   pointer-events: none;
-  opacity: 0.92;
 }
 
 .hud-panel.textured {
   border-color: transparent;
   background-color: transparent;
-  box-shadow: none;
+  text-shadow: none;
 }
 
 #hud {
@@ -103,7 +109,7 @@ html, body {
   top: calc(16px + var(--safe-t));
 }
 
-#hud b { color: #ffd479; }
+#hud b { color: var(--text); font-weight: 600; }
 
 #stats {
   position: fixed;
@@ -113,7 +119,7 @@ html, body {
   white-space: nowrap;
 }
 
-#stats b { color: #ffd479; }
+#stats b { color: var(--text); font-weight: 600; }
 
 body.is-touch #hudKeys,
 body.is-touch #hudKeys2 { display: none; }
@@ -124,24 +130,23 @@ body.is-touch #hudKeys2 { display: none; }
 #crosshair {
   position: fixed;
   left: 50%; top: 50%;
-  width: 22px; height: 22px;
-  margin: -11px 0 0 -11px;
+  width: 18px; height: 18px;
+  margin: -9px 0 0 -9px;
   pointer-events: none;
-  opacity: 0.35;
+  opacity: 0.5;
 }
 #crosshair::before,
 #crosshair::after {
   content: '';
   position: absolute;
   background: #fff;
-  box-shadow: 0 0 3px #000;
 }
-#crosshair::before { left: 10px; top: 0; width: 2px; height: 22px; }
-#crosshair::after  { left: 0; top: 10px; width: 22px; height: 2px; }
+#crosshair::before { left: 8px; top: 0; width: 1px; height: 18px; }
+#crosshair::after  { left: 0; top: 8px; width: 18px; height: 1px; }
 
 #crosshair.textured {
-  width: 48px; height: 48px;
-  margin: -24px 0 0 -24px;
+  width: 40px; height: 40px;
+  margin: -20px 0 0 -20px;
   background-image: var(--ui-crosshair);
   background-size: contain;
   background-repeat: no-repeat;
@@ -159,14 +164,13 @@ body.is-touch #hudKeys2 { display: none; }
   left: 50%; top: 42%;
   transform: translate(-50%, -50%);
   color: #fff;
-  font-size: 30px;
-  letter-spacing: 4px;
-  font-weight: 700;
-  text-shadow: 0 3px 18px rgba(0, 0, 0, 0.9);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.25s;
-  font-family: system-ui, sans-serif;
 }
 
 /* =========================================================================
@@ -197,97 +201,49 @@ body.is-touch #resetBtn { display: block; }
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 2px solid rgba(120, 200, 255, 0.42);
-  background-image:
-    var(--ui-stick-base, none),
-    radial-gradient(circle at 50% 50%,
-      rgba(60, 140, 200, 0.12) 0%,
-      rgba(20, 50, 80, 0.30) 55%,
-      rgba(8, 18, 32, 0.52) 100%);
-  background-size: 100% 100%, 100% 100%;
-  background-repeat: no-repeat, no-repeat;
-  box-shadow:
-    inset 0 0 24px rgba(0, 0, 0, 0.60),
-    inset 0 0 6px rgba(140, 220, 255, 0.15),
-    0 0 14px rgba(60, 160, 240, 0.22);
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-
-.stick-base::before,
-.stick-base::after {
-  content: '';
-  position: absolute;
-  background: rgba(140, 220, 255, 0.30);
-  pointer-events: none;
-}
-.stick-base::before {
-  left: 50%; top: 12px; bottom: 12px;
-  width: 1px;
-  transform: translateX(-50%);
-}
-.stick-base::after {
-  top: 50%; left: 12px; right: 12px;
-  height: 1px;
-  transform: translateY(-50%);
+  border: 1px solid var(--line);
+  background-color: rgba(0, 0, 0, 0.15);
+  background-image: var(--ui-stick-base, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  transition: border-color 0.15s, background-color 0.15s;
 }
 
 .stick.active .stick-base {
-  border-color: rgba(180, 240, 255, 0.75);
-  background-image:
-    var(--ui-stick-base-active, var(--ui-stick-base, none)),
-    radial-gradient(circle at 50% 50%,
-      rgba(100, 180, 240, 0.20) 0%,
-      rgba(30, 70, 110, 0.38) 55%,
-      rgba(12, 24, 42, 0.58) 100%);
-  box-shadow:
-    inset 0 0 24px rgba(0, 0, 0, 0.60),
-    inset 0 0 10px rgba(140, 220, 255, 0.32),
-    0 0 22px rgba(100, 200, 255, 0.48);
+  border-color: var(--line-2);
+  background-color: rgba(0, 0, 0, 0.25);
+  background-image: var(--ui-stick-base-active, var(--ui-stick-base, none));
 }
 
 .knob {
   position: absolute;
   left: 50%; top: 50%;
-  width: 62px; height: 62px;
-  margin: -31px 0 0 -31px;
+  width: 54px; height: 54px;
+  margin: -27px 0 0 -27px;
   border-radius: 50%;
-  background-image:
-    var(--ui-stick-knob, none),
-    radial-gradient(circle at 35% 30%,
-      rgba(220, 240, 255, 0.95) 0%,
-      rgba(120, 180, 230, 0.88) 45%,
-      rgba(40, 90, 140, 0.92) 100%);
-  background-size: 100% 100%, 100% 100%;
-  background-repeat: no-repeat, no-repeat;
-  border: 2px solid rgba(190, 230, 255, 0.85);
-  box-shadow:
-    0 2px 10px rgba(0, 0, 0, 0.55),
-    0 0 12px rgba(100, 200, 255, 0.35);
+  background-color: rgba(255, 255, 255, 0.8);
+  background-image: var(--ui-stick-knob, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   will-change: transform;
   pointer-events: none;
+  transition: background-color 0.15s;
 }
 .stick.active .knob {
-  background-image:
-    var(--ui-stick-knob-active, var(--ui-stick-knob, none)),
-    radial-gradient(circle at 35% 30%,
-      rgba(255, 255, 255, 1.00) 0%,
-      rgba(160, 210, 250, 0.95) 45%,
-      rgba(60, 120, 180, 0.95) 100%);
-  box-shadow:
-    0 2px 10px rgba(0, 0, 0, 0.55),
-    0 0 22px rgba(140, 220, 255, 0.75);
+  background-color: rgba(255, 255, 255, 1);
+  background-image: var(--ui-stick-knob-active, var(--ui-stick-knob, none));
 }
 
 .stickLabel {
   position: absolute;
-  left: 50%; bottom: -22px;
+  left: 50%; bottom: -20px;
   transform: translateX(-50%);
-  color: #cfe8ff;
+  color: var(--muted);
   font-size: 10px;
-  letter-spacing: 1.5px;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
-  opacity: 0.78;
 }
 
 /* ---- Throttle ---- */
@@ -314,37 +270,25 @@ body.is-touch #resetBtn { display: block; }
   left: 50%;
   top: var(--throttle-top);
   bottom: 0;
-  width: 20px;
-  margin-left: -10px;
-  border-radius: 10px;
-  background-image:
-    var(--ui-throttle-track, none),
-    linear-gradient(to bottom,
-      rgba(12, 26, 46, 0.80) 0%,
-      rgba(6, 14, 28, 0.90) 100%);
-  background-size: 100% 100%, 100% 100%;
-  background-repeat: no-repeat, no-repeat;
-  border: 1px solid rgba(120, 200, 255, 0.45);
-  box-shadow:
-    inset 0 0 12px rgba(0, 0, 0, 0.75),
-    0 0 10px rgba(80, 180, 255, 0.22);
-  overflow: visible;
+  width: 8px;
+  margin-left: -4px;
+  border-radius: 4px;
+  background-color: rgba(0, 0, 0, 0.4);
+  background-image: var(--ui-throttle-track, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border: 1px solid var(--line);
 }
 
 .throttle-fill {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   height: 0%;
-  border-radius: 0 0 10px 10px;
-  background-image:
-    var(--ui-throttle-fill, none),
-    linear-gradient(to top,
-      #ffb84d 0%,
-      #ff7043 60%,
-      #ff5252 100%);
-  background-size: 100% 100%, 100% 100%;
-  background-repeat: no-repeat, no-repeat;
-  box-shadow: 0 0 12px rgba(255, 140, 60, 0.55);
+  border-radius: 4px;
+  background-color: rgba(255, 255, 255, 0.85);
+  background-image: var(--ui-throttle-fill, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   pointer-events: none;
 }
 
@@ -352,36 +296,19 @@ body.is-touch #resetBtn { display: block; }
   position: absolute;
   left: 50%;
   bottom: 0%;
-  width: 44px;
-  height: 44px;
+  width: 28px;
+  height: 28px;
   transform: translate(-50%, 50%);
   border-radius: 50%;
-  background-image:
-    var(--ui-throttle-handle, none),
-    radial-gradient(circle at 35% 30%,
-      #d8eeff 0%,
-      #7fb8e0 42%,
-      #2c6a9c 100%);
-  background-size: 100% 100%, 100% 100%;
-  background-repeat: no-repeat, no-repeat;
-  border: 2px solid rgba(180, 220, 255, 0.9);
-  box-shadow:
-    0 2px 8px rgba(0, 0, 0, 0.6),
-    0 0 12px rgba(80, 180, 255, 0.4);
+  background-color: #fff;
+  background-image: var(--ui-throttle-handle, none);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
   pointer-events: none;
   will-change: bottom;
 }
 #throttle.active .throttle-handle {
-  background-image:
-    var(--ui-throttle-handle-active,
-      var(--ui-throttle-handle, none)),
-    radial-gradient(circle at 35% 30%,
-      #ffffff 0%,
-      #a8d4ff 42%,
-      #3d8ac4 100%);
-  box-shadow:
-    0 2px 8px rgba(0, 0, 0, 0.6),
-    0 0 22px rgba(120, 220, 255, 0.75);
+  background-image: var(--ui-throttle-handle-active, var(--ui-throttle-handle, none));
 }
 
 .throttle-frame {
@@ -403,11 +330,11 @@ body.is-touch #resetBtn { display: block; }
   left: 50%;
   transform: translateX(-50%);
   font-size: 10px;
-  letter-spacing: 1.6px;
-  color: #cfe8ff;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
-  opacity: 0.85;
   pointer-events: none;
 }
 .throttle-label.textured {
@@ -415,11 +342,11 @@ body.is-touch #resetBtn { display: block; }
   height: 16px;
   font-size: 0;
   color: transparent;
+  text-shadow: none;
   background-image: var(--ui-throttle-label);
   background-size: contain;
   background-repeat: no-repeat;
   background-position: center;
-  opacity: 1;
 }
 
 /* =========================================================================
@@ -428,15 +355,14 @@ body.is-touch #resetBtn { display: block; }
 #resetBtn {
   position: fixed;
   right: calc(16px + var(--safe-r));
-  top: calc(90px + var(--safe-t));
+  top: calc(84px + var(--safe-t));
   padding: 8px 14px;
   font: inherit;
   font-size: 12px;
-  letter-spacing: 1px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.35);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
   display: none;
@@ -444,21 +370,22 @@ body.is-touch #resetBtn { display: block; }
 }
 #resetBtn:active {
   background: rgba(0, 0, 0, 0.55);
-  border-color: rgba(180, 240, 255, 0.85);
+  border-color: var(--line-2);
 }
 
 #resetBtn.textured {
   padding: 0 12px;
-  height: 48px;
+  height: 44px;
   line-height: 1;
   font-size: 11px;
-  letter-spacing: 1.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   background: transparent;
-  border: 16px solid transparent;
+  border: 14px solid transparent;
   border-radius: 0;
   border-image-source: var(--ui-btn-frame, none);
-  border-image-slice: 16;
-  border-image-width: 16px;
+  border-image-slice: 14;
+  border-image-width: 14px;
   border-image-repeat: stretch;
   display: none;
   align-items: center;
