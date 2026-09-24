@@ -6,42 +6,35 @@
    ------------------------------------------------------------------
      plane.png          airplane body
      propeller.png      propeller
-     tree_oak.png       tree atlas / per-type textures
-     tree_pine.png
-     tree_birch.png
-     tree_maple.png
-     tree_spruce.png
-     tree_redwood.png
-     tree_willow.png
-     tree_palm.png
-     tree_cactus.png
-     tree_bush.png
-     tree_dead.png
+     tree_oak.png ... tree_dead.png  (per-variant tree textures)
 
-   If a file is missing, the mesh keeps its procedural vertex colours.
-   Plane / propeller use world-wrapped UVs so the texture flows around the
-   whole airframe.  Trees use world-wrapped UVs at a smaller scale.
+   UI TEXTURES  (drop PNGs into ./ui/ — all optional)
    ------------------------------------------------------------------
+     stick-base.png           256x256
+     stick-base-active.png    256x256
+     stick-knob.png           128x128
+     stick-knob-active.png    128x128
+     throttle-track.png       64x512
+     throttle-fill.png        64x512
+     throttle-handle.png      128x128
+     throttle-handle-active.png 128x128
+     throttle-frame.png       128x512
+     throttle-label.png       256x64
+     crosshair.png            64x64
+     hud-panel.png            256x256
+     hud-corner.png           64x64
+     btn-frame.png            256x64
+     btn-frame-active.png     256x64
+
+   Missing files are expected. graphics.js falls back to CSS-only UI.
+
    RENDERER REQUIREMENTS
    ------------------------------------------------------------------
      attribute 0 : vec3 position
      attribute 1 : vec3 normal
-     attribute 2 : vec3 colour     (multiply with texture)
-     attribute 3 : vec2 uv         (needed for textures)
-     uniform sampler2D uTexture    (bind mesh.texture here, unit 0)
-   ------------------------------------------------------------------
-
-   CHANGES IN THIS VERSION
-   ------------------------------------------------------------------
-   • Biome noise frequencies raised ~4x so biomes are encountered locally
-     instead of once per ~7,000 units.
-   • Three new biomes added: savanna, badlands, highlands.
-   • Terrain now stacks three overlapping mountain scales (large ranges,
-     medium connector ridges, small foothills) with a much taller peak
-     contribution, so massive mountains actually appear in view.
-   • Tree tables extended for the new biomes.
-   • Oasis palm trigger window widened so palms ring the water tongues.
-   ------------------------------------------------------------------
+     attribute 2 : vec3 colour
+     attribute 3 : vec2 uv
+     uniform sampler2D uTexture
 */
 (function (global) {
 'use strict';
@@ -96,7 +89,7 @@ function ridgedFbm(x, y, oct) {
     amp *= 0.5;
     freq *= 2.03;
   }
-  return sum / n; // 0..1
+  return sum / n;
 }
 
 /* =========================================================================
@@ -104,10 +97,6 @@ function ridgedFbm(x, y, oct) {
    ========================================================================= */
 const SEA_LEVEL = 0;
 
-/* Wavelengths tuned so biomes are visible during a single flight:
-     tempNoise  : wavelength ≈ 2,200 units
-     moistNoise : wavelength ≈ 1,400 units
-   (previous values were ~7,700 / ~4,760, i.e. effectively invisible) */
 function tempNoise(x, z) {
   return fbm(x * 0.00045 + 512.3, z * 0.00045 + 941.7, 3);
 }
@@ -119,34 +108,20 @@ function getBiome(x, z, y) {
   const t = tempNoise(x, z);
   const m = moistNoise(x, z);
 
-  /* altitude layers first */
   if (y < SEA_LEVEL - 1.5) return 'ocean';
   if (y < SEA_LEVEL + 2.5) return 'beach';
   if (y > 92) return 'snow';
   if (y > 62) return (t < 0.10) ? 'snow' : 'highlands';
 
-  /* latitude (temperature) */
   if (t < -0.42) return 'snow';
   if (t < -0.28) return 'tundra';
 
-  /* hot / dry quadrant */
-  if (t > 0.15 && m < -0.12) {
-    return (y > 32) ? 'badlands' : 'desert';
-  }
-  /* hot / semi-dry */
-  if (t > 0.18 && m < 0.10) return 'savanna';
-
-  /* hot / wet */
-  if (t > 0.10 && m > 0.30) return 'jungle';
-
-  /* wet & low */
-  if (m > 0.42 && y < 12) return 'swamp';
-
-  /* upland */
-  if (y > 48) return 'mountain';
-
-  /* temperate default */
-  if (m > 0.05) return 'forest';
+  if (t > 0.15 && m < -0.12) return (y > 32) ? 'badlands' : 'desert';
+  if (t > 0.18 && m < 0.10)  return 'savanna';
+  if (t > 0.10 && m > 0.30)  return 'jungle';
+  if (m > 0.42 && y < 12)    return 'swamp';
+  if (y > 48)                return 'mountain';
+  if (m > 0.05)              return 'forest';
   return 'plains';
 }
 
@@ -154,38 +129,22 @@ function getBiome(x, z, y) {
    TERRAIN HEIGHT
    ========================================================================= */
 function terrainHeight(x, z) {
-  /* Continental base — broad shaping */
   const continent = fbm(x * 0.00016, z * 0.00016, 4);
   let h = continent * 50;
-
-  /* Rolling hills */
   h += fbm(x * 0.0034, z * 0.0034, 3) * 12;
 
-  /* ---------------------------------------------------------------
-     MOUNTAINS — three overlapping scales.
-     mask  : where mountains are allowed to form
-     ridge : the actual sharp, elongated mountain shape
-     Higher frequency + more permissive mask = ranges you can
-     actually find and fly through.
-     --------------------------------------------------------------- */
-
-  /* LARGE ranges — towering peaks up to ~230 m */
   const maskLarge = smoothstep(-0.05, 0.40,
       fbm(x * 0.00060 + 71.2, z * 0.00060 + 33.8, 3));
   if (maskLarge > 0.001) {
     const ridgeLarge = ridgedFbm(x * 0.0011 + 12.3, z * 0.0011 + 45.7, 5);
     h += Math.pow(ridgeLarge, 1.35) * maskLarge * 230;
   }
-
-  /* MEDIUM ridges — connector peaks between ranges, ~95 m */
   const maskMed = smoothstep(0.00, 0.45,
       fbm(x * 0.0014 + 88.1, z * 0.0014 + 22.9, 3));
   if (maskMed > 0.001) {
     const ridgeMed = ridgedFbm(x * 0.0025 + 33.7, z * 0.0025 + 91.1, 4);
     h += Math.pow(ridgeMed, 1.5) * maskMed * 95;
   }
-
-  /* SMALL foothills — short bumps, ~30 m */
   const maskSmall = smoothstep(0.10, 0.55,
       fbm(x * 0.0032 + 99.1, z * 0.0032 + 77.4, 2));
   if (maskSmall > 0.001) {
@@ -193,7 +152,6 @@ function terrainHeight(x, z) {
     h += Math.pow(ridgeSmall, 1.6) * maskSmall * 30;
   }
 
-  /* Cliff bands — terraced walls (unchanged idea, tighter mask) */
   const cliffMask = smoothstep(0.55, 0.72,
       fbm(x * 0.0008 + 555, z * 0.0008 + 555, 2));
   if (cliffMask > 0.001) {
@@ -204,10 +162,8 @@ function terrainHeight(x, z) {
     const hTerr = (Math.floor(t) + sharp) * stepH;
     h = h * (1 - cliffMask) + hTerr * cliffMask;
   }
-
   h -= 8;
 
-  /* Desert oases: rare, winding water tongues in low-lying hot/dry areas */
   if (h < 25) {
     const t = tempNoise(x, z);
     const m = moistNoise(x, z);
@@ -221,7 +177,6 @@ function terrainHeight(x, z) {
       }
     }
   }
-
   return h;
 }
 
@@ -268,15 +223,8 @@ function deleteMesh(m) {
   gl.deleteVertexArray(m.vao);
 }
 
-/* Box with UVs.
-   Signature:
-     boxBuilder(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz, color,
-                uvScale, uvMode)
-   uvMode 'fit'   : whole texture per face
-   uvMode 'world' : UVs from model-space, wrapping continuously            */
 function boxBuilder(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz, color,
                     uvScale, uvMode) {
-  /* Backward-compatible with old signature (no uv array) */
   if (typeof uv === 'number') {
     const a = Array.prototype.slice.call(arguments, 4);
     uv = null;
@@ -333,14 +281,14 @@ function finishMesh(pos, nrm, col, idx, uv, texture) {
 }
 
 /* =========================================================================
-   UV SCALES  (world units per texture tile)
+   UV SCALES
    ========================================================================= */
 const PLANE_UV_SCALE = 0.40;
 const PROP_UV_SCALE  = 0.60;
 const TREE_UV_SCALE  = 0.50;
 
 /* =========================================================================
-   WORLD MODELS — AIRCRAFT
+   AIRCRAFT MESHES
    ========================================================================= */
 function buildPlaneMesh(texture) {
   const pos = [], nrm = [], col = [], idx = [], uv = [];
@@ -376,33 +324,27 @@ function buildPropMesh(texture) {
 }
 
 /* =========================================================================
-   WORLD MODELS — TREES
-   All builders: origin at ground, +Y up, roughly 1 unit = 1 metre.
+   TREE MESHES — unchanged from previous version
    ========================================================================= */
 function treePart(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz, color) {
   boxBuilder(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz,
              color, TREE_UV_SCALE, 'world');
 }
 
-/* ---- OAK : medium broad canopy ---------------------------------------- */
 function buildOakMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const TRUNK=[0.28,0.14,0.055];
   const L1=[0.10,0.34,0.10], L2=[0.15,0.46,0.13], L3=[0.22,0.55,0.16];
-
   treePart(pos,nrm,col,idx,uv, 0, 1.60, 0, 0.55,3.20,0.55, TRUNK);
   treePart(pos,nrm,col,idx,uv, 0, 3.20, 0, 3.80,2.40,3.80, L1);
   treePart(pos,nrm,col,idx,uv, 0, 4.90, 0, 3.00,2.10,3.00, L2);
   treePart(pos,nrm,col,idx,uv, 0, 6.35, 0, 2.00,1.70,2.00, L3);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- PINE : medium conical -------------------------------------------- */
 function buildPineMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const TRUNK=[0.30,0.17,0.08];
   const P1=[0.07,0.26,0.12], P2=[0.10,0.34,0.15], P3=[0.14,0.44,0.19];
-
   treePart(pos,nrm,col,idx,uv, 0, 1.50, 0, 0.45,3.00,0.45, TRUNK);
   treePart(pos,nrm,col,idx,uv, 0, 2.60, 0, 3.60,1.90,3.60, P1);
   treePart(pos,nrm,col,idx,uv, 0, 4.00, 0, 2.90,1.80,2.90, P2);
@@ -410,36 +352,27 @@ function buildPineMesh(texture) {
   treePart(pos,nrm,col,idx,uv, 0, 6.50, 0, 1.20,1.60,1.20, P3);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- BIRCH : tall thin, white bark ------------------------------------ */
 function buildBirchMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BARK=[0.88,0.87,0.82];
   const L1=[0.34,0.60,0.20], L2=[0.45,0.72,0.26];
-
   treePart(pos,nrm,col,idx,uv, 0, 2.30, 0, 0.30,4.60,0.30, BARK);
   treePart(pos,nrm,col,idx,uv, 0, 5.20, 0, 2.60,1.80,2.60, L1);
   treePart(pos,nrm,col,idx,uv, 0, 6.35, 0, 1.90,1.50,1.90, L2);
   treePart(pos,nrm,col,idx,uv, 0, 7.25, 0, 1.10,1.20,1.10, L2);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- BUSH : small, low ------------------------------------------------ */
 function buildBushMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const L1=[0.16,0.42,0.14], L2=[0.23,0.53,0.19];
-
   treePart(pos,nrm,col,idx,uv, 0, 0.25, 0, 0.30,0.50,0.30, [0.30,0.20,0.10]);
   treePart(pos,nrm,col,idx,uv, 0, 0.60, 0, 1.80,1.10,1.80, L1);
   treePart(pos,nrm,col,idx,uv, 0, 1.30, 0, 1.30,0.90,1.30, L2);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- DEAD : bare, twisted branches ------------------------------------ */
 function buildDeadTreeMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BARK=[0.30,0.25,0.19], BARK2=[0.40,0.33,0.25];
-
   treePart(pos,nrm,col,idx,uv, 0, 2.20, 0, 0.50,4.40,0.50, BARK);
   treePart(pos,nrm,col,idx,uv, 0.90, 3.60, 0, 1.80,0.26,0.26, BARK2);
   treePart(pos,nrm,col,idx,uv, -0.85, 3.00, 0, 1.60,0.24,0.24, BARK2);
@@ -447,15 +380,11 @@ function buildDeadTreeMesh(texture) {
   treePart(pos,nrm,col,idx,uv, 0.5, 4.1, -0.6, 1.2,0.20,0.20, BARK2);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- PALM : tall, curved, fronds at top ------------------------------- */
 function buildPalmMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const TRUNK=[0.45,0.30,0.16], TRUNK_LT=[0.55,0.38,0.22];
   const FROND=[0.20,0.55,0.18], FROND_LT=[0.32,0.68,0.24];
   const COCO=[0.30,0.20,0.10];
-
-  /* Segmented, slightly leaning trunk */
   const segs = 10, segH = 0.9;
   let topX = 0, topZ = 0;
   for (let i = 0; i < segs; i++) {
@@ -469,61 +398,39 @@ function buildPalmMesh(texture) {
     topX = nx; topZ = nz;
   }
   const topY = 0.5 + segs * segH - 0.2;
-
-  /* Coconut cluster */
   treePart(pos,nrm,col,idx,uv, topX, topY - 0.10, topZ, 0.65,0.45,0.65, COCO);
-
-  /* Fronds (thin boxes radiating from top) */
   const FROND_COUNT = 7;
   for (let i = 0; i < FROND_COUNT; i++) {
     const a = (i / FROND_COUNT) * Math.PI * 2 + 0.37;
     const dx = Math.cos(a), dz = Math.sin(a);
-    /* Inner segment */
     treePart(pos,nrm,col,idx,uv,
              topX + dx * 0.9, topY + 0.20, topZ + dz * 0.9,
-             Math.abs(dx) * 2.0 + 0.35,
-             0.14,
-             Math.abs(dz) * 2.0 + 0.35,
-             FROND);
-    /* Outer, drooping tip */
+             Math.abs(dx) * 2.0 + 0.35, 0.14,
+             Math.abs(dz) * 2.0 + 0.35, FROND);
     treePart(pos,nrm,col,idx,uv,
              topX + dx * 1.9, topY - 0.35, topZ + dz * 1.9,
-             Math.abs(dx) * 1.5 + 0.25,
-             0.12,
-             Math.abs(dz) * 1.5 + 0.25,
-             FROND_LT);
+             Math.abs(dx) * 1.5 + 0.25, 0.12,
+             Math.abs(dz) * 1.5 + 0.25, FROND_LT);
   }
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- CACTUS : saguaro ------------------------------------------------ */
 function buildCactusMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BODY=[0.20,0.50,0.24], BODY_LT=[0.28,0.60,0.30];
-
-  /* Trunk */
   treePart(pos,nrm,col,idx,uv, 0, 2.30, 0, 0.75,4.60,0.75, BODY);
   treePart(pos,nrm,col,idx,uv, 0, 4.55, 0, 0.55,0.35,0.55, BODY_LT);
-
-  /* Left arm */
   treePart(pos,nrm,col,idx,uv, -0.85, 2.60, 0, 1.10,0.50,0.50, BODY);
   treePart(pos,nrm,col,idx,uv, -1.35, 3.45, 0, 0.50,1.90,0.50, BODY);
   treePart(pos,nrm,col,idx,uv, -1.35, 4.35, 0, 0.38,0.28,0.38, BODY_LT);
-
-  /* Right arm */
   treePart(pos,nrm,col,idx,uv,  0.85, 3.10, 0, 1.10,0.50,0.50, BODY);
   treePart(pos,nrm,col,idx,uv,  1.35, 4.00, 0, 0.50,2.10,0.50, BODY);
   treePart(pos,nrm,col,idx,uv,  1.35, 5.00, 0, 0.38,0.28,0.38, BODY_LT);
-
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- REDWOOD : very tall, massive ------------------------------------ */
 function buildRedwoodMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BARK=[0.42,0.20,0.12];
   const L1=[0.09,0.32,0.10], L2=[0.13,0.42,0.13], L3=[0.18,0.50,0.16];
-
   treePart(pos,nrm,col,idx,uv, 0, 6.00, 0, 1.60,12.00,1.60, BARK);
   treePart(pos,nrm,col,idx,uv, 0,11.50, 0, 6.20,3.40,6.20, L1);
   treePart(pos,nrm,col,idx,uv, 0,14.00, 0, 5.00,3.00,5.00, L2);
@@ -531,17 +438,13 @@ function buildRedwoodMesh(texture) {
   treePart(pos,nrm,col,idx,uv, 0,17.80, 0, 2.00,2.20,2.00, L3);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- WILLOW : wide, drooping canopy ---------------------------------- */
 function buildWillowMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BARK=[0.32,0.22,0.12];
   const L1=[0.20,0.44,0.18], L2=[0.30,0.55,0.22], L3=[0.38,0.62,0.26];
-
   treePart(pos,nrm,col,idx,uv, 0, 2.00, 0, 0.65,4.00,0.65, BARK);
   treePart(pos,nrm,col,idx,uv, 0, 3.60, 0, 5.20,1.20,5.20, L1);
   treePart(pos,nrm,col,idx,uv, 0, 4.40, 0, 4.60,1.10,4.60, L2);
-  /* Droopy lower lobes */
   treePart(pos,nrm,col,idx,uv,  2.10, 2.90, 0, 1.60,2.60,1.60, L1);
   treePart(pos,nrm,col,idx,uv, -2.10, 2.90, 0, 1.60,2.60,1.60, L1);
   treePart(pos,nrm,col,idx,uv, 0, 2.90,  2.10, 1.60,2.60,1.60, L1);
@@ -549,13 +452,10 @@ function buildWillowMesh(texture) {
   treePart(pos,nrm,col,idx,uv, 0, 5.20, 0, 3.20,1.00,3.20, L3);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- SPRUCE : tall, narrow, layered ---------------------------------- */
 function buildSpruceMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BARK=[0.28,0.18,0.10];
   const C1=[0.08,0.28,0.12], C2=[0.11,0.36,0.15], C3=[0.16,0.46,0.20];
-
   treePart(pos,nrm,col,idx,uv, 0, 1.80, 0, 0.42,3.60,0.42, BARK);
   treePart(pos,nrm,col,idx,uv, 0, 2.60, 0, 3.40,1.60,3.40, C1);
   treePart(pos,nrm,col,idx,uv, 0, 3.80, 0, 3.00,1.55,3.00, C2);
@@ -566,13 +466,10 @@ function buildSpruceMesh(texture) {
   treePart(pos,nrm,col,idx,uv, 0, 9.25, 0, 0.75,1.20,0.75, C3);
   return finishMesh(pos,nrm,col,idx,uv,texture);
 }
-
-/* ---- MAPLE : medium, warm canopy ------------------------------------- */
 function buildMapleMesh(texture) {
   const pos=[],nrm=[],col=[],idx=[],uv=[];
   const BARK=[0.34,0.22,0.14];
   const L1=[0.55,0.22,0.12], L2=[0.68,0.32,0.14], L3=[0.78,0.44,0.20];
-
   treePart(pos,nrm,col,idx,uv, 0, 1.70, 0, 0.55,3.40,0.55, BARK);
   treePart(pos,nrm,col,idx,uv, 0, 3.30, 0, 4.00,2.10,4.00, L1);
   treePart(pos,nrm,col,idx,uv, 0, 4.70, 0, 3.10,1.90,3.10, L2);
@@ -599,7 +496,6 @@ const TREE_DEFS = {
 
 /* =========================================================================
    BIOME -> TREE VARIANT TABLE
-   Each entry: [variant, cumulativeWeight]
    ========================================================================= */
 const BIOME_TREES = {
   forest:   [['oak',0.22],['pine',0.42],['birch',0.58],['maple',0.72],
@@ -624,13 +520,10 @@ function pickFromTable(table, r) {
   }
   return table.length ? table[table.length - 1][0] : null;
 }
-
 function pickTreeForBiome(biome, y, r) {
-  /* Desert / oasis special case: near water, force palms.
-     Widened trigger window (y < 8.0) so palms ring the water tongues. */
   if (biome === 'desert' || biome === 'badlands') {
     if (y > SEA_LEVEL - 0.5 && y < 8.0) return 'palm';
-    if (y < SEA_LEVEL - 0.5) return null;      // underwater -> skip
+    if (y < SEA_LEVEL - 0.5) return null;
     return pickFromTable(BIOME_TREES[biome], r);
   }
   const table = BIOME_TREES[biome];
@@ -639,64 +532,69 @@ function pickTreeForBiome(biome, y, r) {
 }
 
 /* =========================================================================
-   OPTIONAL ASSETS  (textures)
+   OPTIONAL ASSETS — world textures (WebGL)
    ========================================================================= */
 const ASSET_ROOT = 'assets/';
 const TEXTURE_DEFS = [
-  /* key           path                        fallback RGB            */
-  ['plane',       'plane.png',                [224,  61,  41]],
-  ['propeller',   'propeller.png',            [ 58,  59,  69]],
-  ['tree_oak',    'tree_oak.png',             [ 26,  87,  26]],
-  ['tree_pine',   'tree_pine.png',            [ 18,  66,  30]],
-  ['tree_birch',  'tree_birch.png',           [ 87, 140,  50]],
-  ['tree_maple',  'tree_maple.png',           [140,  56,  30]],
-  ['tree_spruce', 'tree_spruce.png',          [ 20,  72,  38]],
-  ['tree_redwood','tree_redwood.png',         [ 23,  82,  26]],
-  ['tree_willow', 'tree_willow.png',          [ 51, 112,  45]],
-  ['tree_palm',   'tree_palm.png',            [ 51, 140,  46]],
-  ['tree_cactus', 'tree_cactus.png',          [ 51, 128,  61]],
-  ['tree_bush',   'tree_bush.png',            [ 41, 107,  36]],
-  ['tree_dead',   'tree_dead.png',            [ 76,  63,  48]]
+  ['plane',       'plane.png',        [224,  61,  41]],
+  ['propeller',   'propeller.png',    [ 58,  59,  69]],
+  ['tree_oak',    'tree_oak.png',     [ 26,  87,  26]],
+  ['tree_pine',   'tree_pine.png',    [ 18,  66,  30]],
+  ['tree_birch',  'tree_birch.png',   [ 87, 140,  50]],
+  ['tree_maple',  'tree_maple.png',   [140,  56,  30]],
+  ['tree_spruce', 'tree_spruce.png',  [ 20,  72,  38]],
+  ['tree_redwood','tree_redwood.png', [ 23,  82,  26]],
+  ['tree_willow', 'tree_willow.png',  [ 51, 112,  45]],
+  ['tree_palm',   'tree_palm.png',    [ 51, 140,  46]],
+  ['tree_cactus', 'tree_cactus.png',  [ 51, 128,  61]],
+  ['tree_bush',   'tree_bush.png',    [ 41, 107,  36]],
+  ['tree_dead',   'tree_dead.png',    [ 76,  63,  48]]
+];
+
+/* =========================================================================
+   OPTIONAL ASSETS — UI textures (DOM, loaded for existence only)
+   ========================================================================= */
+const UI_ASSET_ROOT = 'ui/';
+const UI_TEXTURE_DEFS = [
+  ['ui_stick_base',             'stick-base.png'],
+  ['ui_stick_base_active',      'stick-base-active.png'],
+  ['ui_stick_knob',             'stick-knob.png'],
+  ['ui_stick_knob_active',      'stick-knob-active.png'],
+  ['ui_throttle_track',         'throttle-track.png'],
+  ['ui_throttle_fill',          'throttle-fill.png'],
+  ['ui_throttle_handle',        'throttle-handle.png'],
+  ['ui_throttle_handle_active', 'throttle-handle-active.png'],
+  ['ui_throttle_frame',         'throttle-frame.png'],
+  ['ui_throttle_label',         'throttle-label.png'],
+  ['ui_crosshair',              'crosshair.png'],
+  ['ui_hud_panel',              'hud-panel.png'],
+  ['ui_hud_corner',             'hud-corner.png'],
+  ['ui_btn_frame',              'btn-frame.png'],
+  ['ui_btn_frame_active',       'btn-frame-active.png']
 ];
 
 const assets = Object.create(null);
+const uiAssets = Object.create(null);
 const assetPaths = Object.create(null);
 
-/* Fan-out per tree variant, so meshes can look up their texture by name. */
 const TREE_TEXTURE_KEY = {
-  oak:     'tree_oak',
-  pine:    'tree_pine',
-  birch:   'tree_birch',
-  maple:   'tree_maple',
-  spruce:  'tree_spruce',
-  redwood: 'tree_redwood',
-  willow:  'tree_willow',
-  palm:    'tree_palm',
-  cactus:  'tree_cactus',
-  bush:    'tree_bush',
-  dead:    'tree_dead'
+  oak:'tree_oak', pine:'tree_pine', birch:'tree_birch', maple:'tree_maple',
+  spruce:'tree_spruce', redwood:'tree_redwood', willow:'tree_willow',
+  palm:'tree_palm', cactus:'tree_cactus', bush:'tree_bush', dead:'tree_dead'
 };
 
-function nextPOT(n) {
-  let p = 1;
-  while (p < n) p <<= 1;
-  return p;
-}
-
+function nextPOT(n) { let p = 1; while (p < n) p <<= 1; return p; }
 function toPowerOfTwo(img) {
   const w = img.width || img.naturalWidth || 0;
   const h = img.height || img.naturalHeight || 0;
   if (!w || !h) return img;
   const pw = nextPOT(w), ph = nextPOT(h);
   if (pw === w && ph === h) return img;
-
   const c = document.createElement('canvas');
   c.width = pw; c.height = ph;
-  const ctx = c.getContext('2d');
-  ctx.drawImage(img, 0, 0, pw, ph);
+  c.getContext('2d').drawImage(img, 0, 0, pw, ph);
   return c;
 }
-
 function makeFallbackTexture(r, g, b, a) {
   if (!gl) return null;
   const tex = gl.createTexture();
@@ -719,17 +617,10 @@ function loadAssetTexture(name, filename, fallback) {
   assetPaths[name] = path;
 
   const tex = makeFallbackTexture(fallback[0], fallback[1], fallback[2]);
-  const entry = {
-    texture: tex,
-    loaded: false,
-    failed: false,
-    path: path,
-    name: name
-  };
+  const entry = { texture: tex, loaded: false, failed: false, path, name };
   assets[name] = entry;
 
   const img = new Image();
-  /* Do NOT set crossOrigin — breaks file:// usage in some browsers. */
   img.onload = () => {
     try {
       const src = toPowerOfTwo(img);
@@ -751,29 +642,51 @@ function loadAssetTexture(name, filename, fallback) {
       for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
     } catch (err) {
       entry.failed = true;
-      console.warn('[Models] texture upload failed for', path, err);
+      console.warn('[Models] texture upload failed:', path, err);
+      for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
     }
   };
   img.onerror = () => {
     entry.failed = true;
-    /* Missing assets are expected — silent, keep fallback colour. */
     for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
   };
   img.src = path;
   return tex;
 }
 
+function loadUIAsset(name, filename) {
+  const path = UI_ASSET_ROOT + filename;
+  const entry = { texture: null, loaded: false, failed: false, path, name };
+  uiAssets[name] = entry;
+  const img = new Image();
+  img.onload = () => {
+    entry.loaded = true;
+    entry.width  = img.naturalWidth;
+    entry.height = img.naturalHeight;
+    for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
+  };
+  img.onerror = () => {
+    entry.failed = true;
+    for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
+  };
+  img.src = path;
+}
+
 function loadAssets() {
-  for (const [name, file, fb] of TEXTURE_DEFS) {
-    loadAssetTexture(name, file, fb);
-  }
+  for (const [name, file, fb] of TEXTURE_DEFS) loadAssetTexture(name, file, fb);
+}
+function loadUIAssets() {
+  for (const [name, file] of UI_TEXTURE_DEFS) loadUIAsset(name, file);
 }
 
 function onAssetsLoaded(cb) {
   _loadListeners.push(cb);
-  /* Fire immediately for any already-resolved entries. */
   for (const k in assets) {
     const e = assets[k];
+    if (e.loaded || e.failed) { try { cb(e); } catch (_) {} }
+  }
+  for (const k in uiAssets) {
+    const e = uiAssets[k];
     if (e.loaded || e.failed) { try { cb(e); } catch (_) {} }
   }
 }
@@ -791,24 +704,20 @@ const TREE_KINDS = Object.keys(TREE_DEFS);
 const models = {
   planeMesh: null,
   propMesh:  null,
-  treeMesh:  null,                     // default tree (oak) — legacy alias
-  treeMeshes: Object.create(null),     // { oak, pine, ... }
+  treeMesh:  null,
+  treeMeshes: Object.create(null),
   treeVariants: TREE_KINDS,
-  TREE_DEFS: TREE_DEFS,
-  BIOME_TREES: BIOME_TREES,
+  TREE_DEFS,
+  BIOME_TREES,
   assets,
+  uiAssets,
   assetPaths,
   onAssetsLoaded,
   registerTexture,
   getBiome,
   SEA_LEVEL,
-  uv: {
-    plane: PLANE_UV_SCALE,
-    prop:  PROP_UV_SCALE,
-    tree:  TREE_UV_SCALE
-  },
+  uv: { plane: PLANE_UV_SCALE, prop: PROP_UV_SCALE, tree: TREE_UV_SCALE },
 
-  /* Renderer helper: resolves the mesh for a spawned tree object. */
   getTreeMesh(obj) {
     if (!obj) return models.treeMesh;
     if (obj.mesh) return obj.mesh;
@@ -819,11 +728,8 @@ const models = {
 
 function init(glContext) {
   gl = glContext;
-
-  /* Textures first: 1x1 fallbacks are created synchronously; the real PNGs
-     swap in asynchronously.  Meshes hold a stable WebGLTexture reference, so
-     they automatically pick up the real image when it arrives. */
   loadAssets();
+  loadUIAssets();
 
   const planeTex = assets.plane ? assets.plane.texture : null;
   const propTex  = assets.propeller ? assets.propeller.texture : null;
@@ -841,7 +747,7 @@ function init(glContext) {
 }
 
 /* =========================================================================
-   CHUNKED TERRAIN STREAMING + TREE SPAWNING
+   CHUNKED TERRAIN STREAMING
    ========================================================================= */
 const CHUNK_SIZE = 140;
 const CHUNK_SEG = 12;
@@ -858,7 +764,6 @@ function buildChunk(cx, cz) {
   const heights = new Float32Array(N * N);
   const pos = new Float32Array(N * N * 3);
   const nrm = new Float32Array(N * N * 3);
-
   let minY = Infinity, maxY = -Infinity;
 
   for (let j = 0; j < N; j++) {
@@ -867,12 +772,8 @@ function buildChunk(cx, cz) {
       const z = oz + j * step;
       const y = terrainHeight(x, z);
       heights[j * N + i] = y;
-
       const k = (j * N + i) * 3;
-      pos[k] = x;
-      pos[k + 1] = y;
-      pos[k + 2] = z;
-
+      pos[k] = x; pos[k + 1] = y; pos[k + 2] = z;
       if (y < minY) minY = y;
       if (y > maxY) maxY = y;
     }
@@ -884,16 +785,12 @@ function buildChunk(cx, cz) {
       const jD = Math.max(0, j - 1), jU = Math.min(N - 1, j + 1);
       const hl = heights[j * N + iL], hr = heights[j * N + iR];
       const hd = heights[jD * N + i], hu = heights[jU * N + i];
-
       const nx = hl - hr;
       const ny = 2 * step;
       const nz = hd - hu;
       const l = Math.hypot(nx, ny, nz) || 1;
       const k = (j * N + i) * 3;
-
-      nrm[k] = nx / l;
-      nrm[k + 1] = ny / l;
-      nrm[k + 2] = nz / l;
+      nrm[k] = nx / l; nrm[k + 1] = ny / l; nrm[k + 2] = nz / l;
     }
   }
 
@@ -911,10 +808,9 @@ function buildChunk(cx, cz) {
   const cy = (minY + maxY) * 0.5;
   const radius = Math.hypot(CHUNK_SIZE * 0.71, (maxY - minY) * 0.5) + 2;
 
-  /* Deterministic forest: the same chunk always gets the same layout. */
   const objects = [];
   const seed = (cx * 73856093) ^ (cz * 19349663);
-  const count = 4 + ((Math.abs(seed) >>> 0) % 5);   // 4..8 attempts
+  const count = 4 + ((Math.abs(seed) >>> 0) % 5);
 
   for (let i = 0; i < count; i++) {
     const r1 = hash2(cx * 31 + i * 17, cz * 47 + i * 13);
@@ -926,16 +822,10 @@ function buildChunk(cx, cz) {
     const x = ox + 12 + r1 * (CHUNK_SIZE - 24);
     const z = oz + 12 + r2 * (CHUNK_SIZE - 24);
     const y = terrainHeight(x, z);
-
-    /* Keep the original spawn area clear. */
     if (Math.hypot(x, z) < 90) continue;
-
     const biome = getBiome(x, z, y);
-
-    /* Never spawn trees under water. */
     if (y < SEA_LEVEL - 0.5) continue;
 
-    /* Reject extreme slopes (trees don't grow on vertical cliff faces). */
     const s = 1.5;
     const dx = terrainHeight(x + s, z) - terrainHeight(x - s, z);
     const dz = terrainHeight(x, z + s) - terrainHeight(x, z - s);
@@ -960,8 +850,7 @@ function buildChunk(cx, cz) {
   }
 
   return {
-    cx, cz, mesh,
-    objects,
+    cx, cz, mesh, objects,
     center: [ox + CHUNK_SIZE * 0.5, cy, oz + CHUNK_SIZE * 0.5],
     radius
   };
@@ -999,9 +888,7 @@ function updateChunks(px, pz) {
   }
 }
 
-function initTerrain(glContext) {
-  gl = glContext;
-}
+function initTerrain(glContext) { gl = glContext; }
 
 /* =========================================================================
    EXPORTS
