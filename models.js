@@ -1,24 +1,50 @@
 /* models.js — terrain generation + every world model
    Terrain is the single source of truth for height, chunks and spawned props.
-   Models owns the aircraft, propeller and tree meshes.
 
-   Optional textures are looked up under ./assets/. Missing files automatically
-   keep the procedural/vertex-color fallback, so the game works immediately.
+   ------------------------------------------------------------------
+   TEXTURES  (drop PNGs into ./assets/ — all optional)
+   ------------------------------------------------------------------
+     plane.png          airplane body
+     propeller.png      propeller
+     tree_oak.png       tree atlas / per-type textures
+     tree_pine.png
+     tree_birch.png
+     tree_maple.png
+     tree_spruce.png
+     tree_redwood.png
+     tree_willow.png
+     tree_palm.png
+     tree_cactus.png
+     tree_bush.png
+     tree_dead.png
 
-   TEXTURES
-   --------
-   plane.png     -> wrapped over the whole aircraft   (assets/plane.png)
-   propeller.png -> wrapped over the propeller        (assets/propeller.png)
-   tree.png      -> optional, off by default          (assets/tree.png)
-
-   Meshes now carry UVs on vertex attribute 3 and expose `mesh.texture`.
-   The renderer must bind mesh.texture on unit 0 and multiply it with the
-   vertex colour when mesh.texture is not null.
+   If a file is missing, the mesh keeps its procedural vertex colours.
+   Plane / propeller use world-wrapped UVs so the texture flows around the
+   whole airframe.  Trees use world-wrapped UVs at a smaller scale.
+   ------------------------------------------------------------------
+   RENDERER REQUIREMENTS
+   ------------------------------------------------------------------
+     attribute 0 : vec3 position
+     attribute 1 : vec3 normal
+     attribute 2 : vec3 colour     (multiply with texture)
+     attribute 3 : vec2 uv         <-- NEW, needed for textures
+     uniform sampler2D uTexture    <-- bind mesh.texture here (unit 0)
+   ------------------------------------------------------------------
 */
 (function (global) {
 'use strict';
 
 let gl = null;
+
+/* =========================================================================
+   MATH HELPERS
+   ========================================================================= */
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+function smoothstep(e0, e1, x) {
+  const t = clamp((x - e0) / (e1 - e0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
 
 /* =========================================================================
    NOISE
@@ -48,16 +74,95 @@ function fbm(x, y, oct) {
   }
   return sum / n;
 }
+function ridgedFbm(x, y, oct) {
+  let amp = 1, freq = 1, sum = 0, n = 0;
+  for (let i = 0; i < oct; i++) {
+    let v = 1 - Math.abs(noise2(x * freq, y * freq) * 2 - 1);
+    v *= v;
+    sum += v * amp;
+    n += amp;
+    amp *= 0.5;
+    freq *= 2.03;
+  }
+  return sum / n; // 0..1
+}
+
+/* =========================================================================
+   BIOME FIELDS
+   ========================================================================= */
+const SEA_LEVEL = 0;
+
+function tempNoise(x, z) {
+  return fbm(x * 0.00013 + 512.3, z * 0.00013 + 941.7, 3);
+}
+function moistNoise(x, z) {
+  return fbm(x * 0.00021 + 187.4, z * 0.00021 + 623.1, 3);
+}
+
+function getBiome(x, z, y) {
+  const t = tempNoise(x, z);
+  const m = moistNoise(x, z);
+
+  if (y < SEA_LEVEL - 1.5) return 'ocean';
+  if (y < SEA_LEVEL + 2.0) return 'beach';
+  if (y > 95) return 'snow';
+  if (t < -0.42 && y > 40) return 'snow';
+  if (t < -0.30) return 'tundra';
+  if (t > 0.15 && m < -0.08) return 'desert';
+  if (t > 0.10 && m > 0.28) return 'jungle';
+  if (m > 0.42 && y < 12) return 'swamp';
+  if (y > 62) return 'mountain';
+  if (m > 0.00) return 'forest';
+  return 'plains';
+}
 
 /* =========================================================================
    TERRAIN HEIGHT
    ========================================================================= */
 function terrainHeight(x, z) {
-  let h = 0;
-  h += fbm(x * 0.00058, z * 0.00058, 4) * 115;
-  h += fbm(x * 0.0042 + 91.3, z * 0.0042 + 17.7, 4) * 24;
-  h += fbm(x * 0.019 + 5.1, z * 0.019 + 44.9, 2) * 3.5;
-  return h - 20;
+  /* Continental base */
+  const continent = fbm(x * 0.00018, z * 0.00018, 4);
+  let h = continent * 55;
+
+  /* Rolling hills */
+  h += fbm(x * 0.0032, z * 0.0032, 3) * 14;
+
+  /* Mountain ranges: masked ridged noise -> long, connecting ranges */
+  const mMask = smoothstep(0.05, 0.55, fbm(x * 0.00035 + 71.2, z * 0.00035 + 33.8, 3));
+  if (mMask > 0.001) {
+    const ridge = ridgedFbm(x * 0.00085 + 12.3, z * 0.00085 + 45.7, 4);
+    h += Math.pow(ridge, 1.7) * mMask * 180;
+  }
+
+  /* Cliff bands: terraced regions with hard vertical walls */
+  const cliffMask = smoothstep(0.5, 0.7, fbm(x * 0.0008 + 555, z * 0.0008 + 555, 2));
+  if (cliffMask > 0.001) {
+    const stepH = 9;
+    const t = h / stepH;
+    const f = t - Math.floor(t);
+    const sharp = Math.pow(f, 3.5);
+    const hTerr = (Math.floor(t) + sharp) * stepH;
+    h = h * (1 - cliffMask) + hTerr * cliffMask;
+  }
+
+  h -= 12;
+
+  /* Desert oases: rare, winding water tongues in low-lying hot/dry areas */
+  if (h < 25) {
+    const t = tempNoise(x, z);
+    const m = moistNoise(x, z);
+    if (t > 0.10 && m < 0.05) {
+      const o = Math.abs(fbm(x * 0.004 + 800, z * 0.004 + 800, 3));
+      const oasis = 1 - smoothstep(0.02, 0.10, o);
+      if (oasis > 0.001) {
+        const floorY = -14;
+        const target = Math.min(h, 4);
+        h = target * (1 - oasis) + floorY * oasis;
+      }
+    }
+  }
+
+  return h;
 }
 
 /* =========================================================================
@@ -103,18 +208,15 @@ function deleteMesh(m) {
   gl.deleteVertexArray(m.vao);
 }
 
-/*  Box with UVs.
-    Signature:  boxBuilder(pos,nrm,col,idx,uv, cx,cy,cz, sx,sy,sz, color,
-                           uvScale, uvMode)
-
-    uvMode 'fit'   -> every face gets the whole texture (0..uvScale per face)
-    uvMode 'world' -> UVs come from the model-space coordinate along the face,
-                      so a texture wraps continuously across the whole model.
-                      uvScale = texture tiles per world unit.
-
-    The legacy signature (no uv array) still works.                        */
+/* Box with UVs.
+   Signature:
+     boxBuilder(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz, color,
+                uvScale, uvMode)
+   uvMode 'fit'   : whole texture per face
+   uvMode 'world' : UVs from model-space, wrapping continuously            */
 function boxBuilder(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz, color,
                     uvScale, uvMode) {
+  /* Backward-compatible with old signature (no uv array) */
   if (typeof uv === 'number') {
     const a = Array.prototype.slice.call(arguments, 4);
     uv = null;
@@ -171,16 +273,11 @@ function finishMesh(pos, nrm, col, idx, uv, texture) {
 }
 
 /* =========================================================================
-   TEXTURE TUNING
+   UV SCALES  (world units per texture tile)
    ========================================================================= */
-/* 'world' UV mode: how many texture tiles fit into one world unit.
-   Smaller value = bigger picture stretched over the model.               */
-const PLANE_UV_SCALE = 1 / 3.0;   // one plane.png tile ≈ 3 units
-const PROP_UV_SCALE  = 1 / 2.0;   // one propeller.png tile ≈ 2 units
-
-/* Set to true to also slap tree.png on every tree (multiplied by the
-   vertex colours if the shader supports it).                            */
-const USE_TREE_TEXTURE = false;
+const PLANE_UV_SCALE = 0.40;
+const PROP_UV_SCALE  = 0.60;
+const TREE_UV_SCALE  = 0.50;
 
 /* =========================================================================
    WORLD MODELS — AIRCRAFT
@@ -191,9 +288,6 @@ function buildPlaneMesh(texture) {
   const WING   = [0.96, 0.97, 0.98];
   const GLASS  = [0.22, 0.44, 0.62];
   const ACCENT = [1.00, 0.80, 0.24];
-
-  /* uvMode 'world' = the texture wraps continuously around the airframe
-     instead of restarting on every box face.                           */
   const W = PLANE_UV_SCALE, M = 'world';
 
   boxBuilder(pos, nrm, col, idx, uv, 0, 0, 0,        1.10, 0.95, 2.40, BODY,   W, M);
@@ -223,88 +317,301 @@ function buildPropMesh(texture) {
 
 /* =========================================================================
    WORLD MODELS — TREES
-   Every builder is origin-at-the-ground, +Y up, roughly 1 unit = 1 metre.
+   All builders: origin at ground, +Y up, roughly 1 unit = 1 metre.
    ========================================================================= */
+function treePart(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz, color) {
+  boxBuilder(pos, nrm, col, idx, uv, cx, cy, cz, sx, sy, sz,
+             color, TREE_UV_SCALE, 'world');
+}
+
+/* ---- OAK : medium broad canopy ---------------------------------------- */
 function buildOakMesh(texture) {
-  const pos = [], nrm = [], col = [], idx = [], uv = [];
-  const TRUNK = [0.28, 0.14, 0.055];
-  const LEAF1 = [0.10, 0.34, 0.10];
-  const LEAF2 = [0.15, 0.46, 0.13];
-  const LEAF3 = [0.22, 0.55, 0.16];
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const TRUNK=[0.28,0.14,0.055];
+  const L1=[0.10,0.34,0.10], L2=[0.15,0.46,0.13], L3=[0.22,0.55,0.16];
 
-  boxBuilder(pos, nrm, col, idx, uv, 0, 1.60, 0, 0.55, 3.20, 0.55, TRUNK);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 3.20, 0, 3.80, 2.40, 3.80, LEAF1);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 4.90, 0, 3.00, 2.10, 3.00, LEAF2);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 6.35, 0, 2.00, 1.70, 2.00, LEAF3);
-
-  return finishMesh(pos, nrm, col, idx, uv, texture);
+  treePart(pos,nrm,col,idx,uv, 0, 1.60, 0, 0.55,3.20,0.55, TRUNK);
+  treePart(pos,nrm,col,idx,uv, 0, 3.20, 0, 3.80,2.40,3.80, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 4.90, 0, 3.00,2.10,3.00, L2);
+  treePart(pos,nrm,col,idx,uv, 0, 6.35, 0, 2.00,1.70,2.00, L3);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
 }
 
+/* ---- PINE : medium conical -------------------------------------------- */
 function buildPineMesh(texture) {
-  const pos = [], nrm = [], col = [], idx = [], uv = [];
-  const TRUNK = [0.30, 0.17, 0.08];
-  const P1 = [0.07, 0.26, 0.12];
-  const P2 = [0.10, 0.34, 0.15];
-  const P3 = [0.14, 0.44, 0.19];
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const TRUNK=[0.30,0.17,0.08];
+  const P1=[0.07,0.26,0.12], P2=[0.10,0.34,0.15], P3=[0.14,0.44,0.19];
 
-  boxBuilder(pos, nrm, col, idx, uv, 0, 1.50, 0, 0.45, 3.00, 0.45, TRUNK);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 2.60, 0, 3.60, 1.90, 3.60, P1);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 4.00, 0, 2.90, 1.80, 2.90, P2);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 5.30, 0, 2.10, 1.70, 2.10, P2);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 6.50, 0, 1.20, 1.60, 1.20, P3);
-
-  return finishMesh(pos, nrm, col, idx, uv, texture);
+  treePart(pos,nrm,col,idx,uv, 0, 1.50, 0, 0.45,3.00,0.45, TRUNK);
+  treePart(pos,nrm,col,idx,uv, 0, 2.60, 0, 3.60,1.90,3.60, P1);
+  treePart(pos,nrm,col,idx,uv, 0, 4.00, 0, 2.90,1.80,2.90, P2);
+  treePart(pos,nrm,col,idx,uv, 0, 5.30, 0, 2.10,1.70,2.10, P2);
+  treePart(pos,nrm,col,idx,uv, 0, 6.50, 0, 1.20,1.60,1.20, P3);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
 }
 
+/* ---- BIRCH : tall thin, white bark ------------------------------------ */
 function buildBirchMesh(texture) {
-  const pos = [], nrm = [], col = [], idx = [], uv = [];
-  const BARK  = [0.88, 0.87, 0.82];
-  const LEAF1 = [0.34, 0.60, 0.20];
-  const LEAF2 = [0.45, 0.72, 0.26];
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BARK=[0.88,0.87,0.82];
+  const L1=[0.34,0.60,0.20], L2=[0.45,0.72,0.26];
 
-  boxBuilder(pos, nrm, col, idx, uv, 0, 2.30, 0, 0.30, 4.60, 0.30, BARK);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 5.20, 0, 2.60, 1.80, 2.60, LEAF1);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 6.35, 0, 1.90, 1.50, 1.90, LEAF2);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 7.25, 0, 1.10, 1.20, 1.10, LEAF2);
-
-  return finishMesh(pos, nrm, col, idx, uv, texture);
+  treePart(pos,nrm,col,idx,uv, 0, 2.30, 0, 0.30,4.60,0.30, BARK);
+  treePart(pos,nrm,col,idx,uv, 0, 5.20, 0, 2.60,1.80,2.60, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 6.35, 0, 1.90,1.50,1.90, L2);
+  treePart(pos,nrm,col,idx,uv, 0, 7.25, 0, 1.10,1.20,1.10, L2);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
 }
 
+/* ---- BUSH : small, low ------------------------------------------------ */
 function buildBushMesh(texture) {
-  const pos = [], nrm = [], col = [], idx = [], uv = [];
-  const LEAF1 = [0.16, 0.42, 0.14];
-  const LEAF2 = [0.23, 0.53, 0.19];
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const L1=[0.16,0.42,0.14], L2=[0.23,0.53,0.19];
 
-  boxBuilder(pos, nrm, col, idx, uv, 0, 0.25, 0, 0.30, 0.50, 0.30, [0.30, 0.20, 0.10]);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 0.60, 0, 1.80, 1.10, 1.80, LEAF1);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 1.30, 0, 1.30, 0.90, 1.30, LEAF2);
-
-  return finishMesh(pos, nrm, col, idx, uv, texture);
+  treePart(pos,nrm,col,idx,uv, 0, 0.25, 0, 0.30,0.50,0.30, [0.30,0.20,0.10]);
+  treePart(pos,nrm,col,idx,uv, 0, 0.60, 0, 1.80,1.10,1.80, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 1.30, 0, 1.30,0.90,1.30, L2);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
 }
 
+/* ---- DEAD : bare, twisted branches ------------------------------------ */
 function buildDeadTreeMesh(texture) {
-  const pos = [], nrm = [], col = [], idx = [], uv = [];
-  const BARK  = [0.30, 0.25, 0.19];
-  const BARK2 = [0.40, 0.33, 0.25];
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BARK=[0.30,0.25,0.19], BARK2=[0.40,0.33,0.25];
 
-  boxBuilder(pos, nrm, col, idx, uv, 0, 2.20, 0, 0.50, 4.40, 0.50, BARK);
-  boxBuilder(pos, nrm, col, idx, uv, 0.90, 3.60, 0, 1.80, 0.26, 0.26, BARK2);
-  boxBuilder(pos, nrm, col, idx, uv, -0.85, 3.00, 0, 1.60, 0.24, 0.24, BARK2);
-  boxBuilder(pos, nrm, col, idx, uv, 0, 4.55, 0.35, 0.24, 0.24, 1.40, BARK2);
+  treePart(pos,nrm,col,idx,uv, 0, 2.20, 0, 0.50,4.40,0.50, BARK);
+  treePart(pos,nrm,col,idx,uv, 0.90, 3.60, 0, 1.80,0.26,0.26, BARK2);
+  treePart(pos,nrm,col,idx,uv, -0.85, 3.00, 0, 1.60,0.24,0.24, BARK2);
+  treePart(pos,nrm,col,idx,uv, 0, 4.55, 0.35, 0.24,0.24,1.40, BARK2);
+  treePart(pos,nrm,col,idx,uv, 0.5, 4.1, -0.6, 1.2,0.20,0.20, BARK2);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
+}
 
-  return finishMesh(pos, nrm, col, idx, uv, texture);
+/* ---- PALM : tall, curved, fronds at top ------------------------------- */
+function buildPalmMesh(texture) {
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const TRUNK=[0.45,0.30,0.16], TRUNK_LT=[0.55,0.38,0.22];
+  const FROND=[0.20,0.55,0.18], FROND_LT=[0.32,0.68,0.24];
+  const COCO=[0.30,0.20,0.10];
+
+  /* Segmented, slightly leaning trunk */
+  const segs = 10, segH = 0.9;
+  let topX = 0, topZ = 0;
+  for (let i = 0; i < segs; i++) {
+    const t = i / segs;
+    const nx = Math.sin(i * 0.35) * 0.35 * t;
+    const nz = Math.cos(i * 0.28) * 0.22 * t;
+    const y = 0.5 + i * segH;
+    const w = 0.55 - t * 0.20;
+    treePart(pos,nrm,col,idx,uv, nx, y, nz, w, segH, w,
+             (i % 2) ? TRUNK : TRUNK_LT);
+    topX = nx; topZ = nz;
+  }
+  const topY = 0.5 + segs * segH - 0.2;
+
+  /* Coconut cluster */
+  treePart(pos,nrm,col,idx,uv, topX, topY - 0.10, topZ, 0.65,0.45,0.65, COCO);
+
+  /* Fronds (thin boxes radiating from top) */
+  const FROND_COUNT = 7;
+  for (let i = 0; i < FROND_COUNT; i++) {
+    const a = (i / FROND_COUNT) * Math.PI * 2 + 0.37;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    /* Inner segment */
+    treePart(pos,nrm,col,idx,uv,
+             topX + dx * 0.9, topY + 0.20, topZ + dz * 0.9,
+             Math.abs(dx) * 2.0 + 0.35,
+             0.14,
+             Math.abs(dz) * 2.0 + 0.35,
+             FROND);
+    /* Outer, drooping tip */
+    treePart(pos,nrm,col,idx,uv,
+             topX + dx * 1.9, topY - 0.35, topZ + dz * 1.9,
+             Math.abs(dx) * 1.5 + 0.25,
+             0.12,
+             Math.abs(dz) * 1.5 + 0.25,
+             FROND_LT);
+  }
+  return finishMesh(pos,nrm,col,idx,uv,texture);
+}
+
+/* ---- CACTUS : saguaro ------------------------------------------------ */
+function buildCactusMesh(texture) {
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BODY=[0.20,0.50,0.24], BODY_LT=[0.28,0.60,0.30];
+
+  /* Trunk */
+  treePart(pos,nrm,col,idx,uv, 0, 2.30, 0, 0.75,4.60,0.75, BODY);
+  treePart(pos,nrm,col,idx,uv, 0, 4.55, 0, 0.55,0.35,0.55, BODY_LT);
+
+  /* Left arm */
+  treePart(pos,nrm,col,idx,uv, -0.85, 2.60, 0, 1.10,0.50,0.50, BODY);
+  treePart(pos,nrm,col,idx,uv, -1.35, 3.45, 0, 0.50,1.90,0.50, BODY);
+  treePart(pos,nrm,col,idx,uv, -1.35, 4.35, 0, 0.38,0.28,0.38, BODY_LT);
+
+  /* Right arm */
+  treePart(pos,nrm,col,idx,uv,  0.85, 3.10, 0, 1.10,0.50,0.50, BODY);
+  treePart(pos,nrm,col,idx,uv,  1.35, 4.00, 0, 0.50,2.10,0.50, BODY);
+  treePart(pos,nrm,col,idx,uv,  1.35, 5.00, 0, 0.38,0.28,0.38, BODY_LT);
+
+  return finishMesh(pos,nrm,col,idx,uv,texture);
+}
+
+/* ---- REDWOOD : very tall, massive ------------------------------------ */
+function buildRedwoodMesh(texture) {
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BARK=[0.42,0.20,0.12];
+  const L1=[0.09,0.32,0.10], L2=[0.13,0.42,0.13], L3=[0.18,0.50,0.16];
+
+  treePart(pos,nrm,col,idx,uv, 0, 6.00, 0, 1.60,12.00,1.60, BARK);
+  treePart(pos,nrm,col,idx,uv, 0,11.50, 0, 6.20,3.40,6.20, L1);
+  treePart(pos,nrm,col,idx,uv, 0,14.00, 0, 5.00,3.00,5.00, L2);
+  treePart(pos,nrm,col,idx,uv, 0,16.20, 0, 3.60,2.60,3.60, L2);
+  treePart(pos,nrm,col,idx,uv, 0,17.80, 0, 2.00,2.20,2.00, L3);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
+}
+
+/* ---- WILLOW : wide, drooping canopy ---------------------------------- */
+function buildWillowMesh(texture) {
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BARK=[0.32,0.22,0.12];
+  const L1=[0.20,0.44,0.18], L2=[0.30,0.55,0.22], L3=[0.38,0.62,0.26];
+
+  treePart(pos,nrm,col,idx,uv, 0, 2.00, 0, 0.65,4.00,0.65, BARK);
+  treePart(pos,nrm,col,idx,uv, 0, 3.60, 0, 5.20,1.20,5.20, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 4.40, 0, 4.60,1.10,4.60, L2);
+  /* Droopy lower lobes */
+  treePart(pos,nrm,col,idx,uv,  2.10, 2.90, 0, 1.60,2.60,1.60, L1);
+  treePart(pos,nrm,col,idx,uv, -2.10, 2.90, 0, 1.60,2.60,1.60, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 2.90,  2.10, 1.60,2.60,1.60, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 2.90, -2.10, 1.60,2.60,1.60, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 5.20, 0, 3.20,1.00,3.20, L3);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
+}
+
+/* ---- SPRUCE : tall, narrow, layered ---------------------------------- */
+function buildSpruceMesh(texture) {
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BARK=[0.28,0.18,0.10];
+  const C1=[0.08,0.28,0.12], C2=[0.11,0.36,0.15], C3=[0.16,0.46,0.20];
+
+  treePart(pos,nrm,col,idx,uv, 0, 1.80, 0, 0.42,3.60,0.42, BARK);
+  treePart(pos,nrm,col,idx,uv, 0, 2.60, 0, 3.40,1.60,3.40, C1);
+  treePart(pos,nrm,col,idx,uv, 0, 3.80, 0, 3.00,1.55,3.00, C2);
+  treePart(pos,nrm,col,idx,uv, 0, 5.00, 0, 2.55,1.50,2.55, C1);
+  treePart(pos,nrm,col,idx,uv, 0, 6.15, 0, 2.10,1.45,2.10, C2);
+  treePart(pos,nrm,col,idx,uv, 0, 7.25, 0, 1.65,1.40,1.65, C3);
+  treePart(pos,nrm,col,idx,uv, 0, 8.30, 0, 1.20,1.30,1.20, C2);
+  treePart(pos,nrm,col,idx,uv, 0, 9.25, 0, 0.75,1.20,0.75, C3);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
+}
+
+/* ---- MAPLE : medium, warm canopy ------------------------------------- */
+function buildMapleMesh(texture) {
+  const pos=[],nrm=[],col=[],idx=[],uv=[];
+  const BARK=[0.34,0.22,0.14];
+  const L1=[0.55,0.22,0.12], L2=[0.68,0.32,0.14], L3=[0.78,0.44,0.20];
+
+  treePart(pos,nrm,col,idx,uv, 0, 1.70, 0, 0.55,3.40,0.55, BARK);
+  treePart(pos,nrm,col,idx,uv, 0, 3.30, 0, 4.00,2.10,4.00, L1);
+  treePart(pos,nrm,col,idx,uv, 0, 4.70, 0, 3.10,1.90,3.10, L2);
+  treePart(pos,nrm,col,idx,uv, 0, 5.90, 0, 2.10,1.60,2.10, L3);
+  return finishMesh(pos,nrm,col,idx,uv,texture);
 }
 
 /* =========================================================================
-   OPTIONAL ASSETS
+   TREE REGISTRY
+   ========================================================================= */
+const TREE_DEFS = {
+  oak:     { build: buildOakMesh,     scale: [0.85, 1.30], biome: 'forest' },
+  pine:    { build: buildPineMesh,    scale: [0.90, 1.40], biome: 'forest' },
+  birch:   { build: buildBirchMesh,   scale: [0.75, 1.15], biome: 'forest' },
+  bush:    { build: buildBushMesh,    scale: [0.80, 1.50], biome: 'any'    },
+  dead:    { build: buildDeadTreeMesh,scale: [0.80, 1.25], biome: 'any'    },
+  palm:    { build: buildPalmMesh,    scale: [0.85, 1.30], biome: 'desert' },
+  cactus:  { build: buildCactusMesh,  scale: [0.75, 1.30], biome: 'desert' },
+  redwood: { build: buildRedwoodMesh, scale: [0.75, 1.15], biome: 'forest' },
+  willow:  { build: buildWillowMesh,  scale: [0.80, 1.20], biome: 'swamp'  },
+  spruce:  { build: buildSpruceMesh,  scale: [0.85, 1.35], biome: 'cold'   },
+  maple:   { build: buildMapleMesh,   scale: [0.80, 1.20], biome: 'forest' }
+};
+
+/* =========================================================================
+   BIOME -> TREE VARIANT TABLE
+   Each entry: [variant, cumulativeWeight]
+   ========================================================================= */
+const BIOME_TREES = {
+  forest:  [['oak',0.22],['pine',0.42],['birch',0.58],['maple',0.72],
+            ['spruce',0.82],['willow',0.89],['redwood',0.95],['bush',1.00]],
+  plains:  [['oak',0.35],['bush',0.62],['birch',0.82],['maple',1.00]],
+  jungle:  [['palm',0.35],['willow',0.58],['bush',0.80],['redwood',1.00]],
+  desert:  [['cactus',0.55],['dead',1.00]],
+  tundra:  [['spruce',0.40],['pine',0.70],['dead',1.00]],
+  snow:    [['spruce',0.65],['dead',1.00]],
+  mountain:[['pine',0.50],['spruce',0.82],['dead',1.00]],
+  swamp:   [['willow',0.55],['dead',1.00]],
+  beach:   [['palm',0.75],['bush',1.00]],
+  ocean:   []
+};
+
+function pickFromTable(table, r) {
+  for (let i = 0; i < table.length; i++) {
+    if (r <= table[i][1]) return table[i][0];
+  }
+  return table.length ? table[table.length - 1][0] : null;
+}
+
+function pickTreeForBiome(biome, y, r) {
+  /* Desert / oasis special case: near water, force palms */
+  if (biome === 'desert') {
+    if (y > SEA_LEVEL - 0.5 && y < 6.0) return 'palm';
+    if (y < SEA_LEVEL - 0.5) return null;      // underwater -> skip
+    return pickFromTable(BIOME_TREES.desert, r);
+  }
+  const table = BIOME_TREES[biome];
+  if (!table || !table.length) return null;
+  return pickFromTable(table, r);
+}
+
+/* =========================================================================
+   OPTIONAL ASSETS  (textures)
    ========================================================================= */
 const ASSET_ROOT = 'assets/';
-const assetPaths = {
-  plane: ASSET_ROOT + 'plane.png',
-  propeller: ASSET_ROOT + 'propeller.png',
-  tree: ASSET_ROOT + 'tree.png'
-};
+const TEXTURE_DEFS = [
+  /* key           path                        fallback RGB            */
+  ['plane',       'plane.png',                [224,  61,  41]],
+  ['propeller',   'propeller.png',            [ 58,  59,  69]],
+  ['tree_oak',    'tree_oak.png',             [ 26,  87,  26]],
+  ['tree_pine',   'tree_pine.png',            [ 18,  66,  30]],
+  ['tree_birch',  'tree_birch.png',           [ 87, 140,  50]],
+  ['tree_maple',  'tree_maple.png',           [140,  56,  30]],
+  ['tree_spruce', 'tree_spruce.png',          [ 20,  72,  38]],
+  ['tree_redwood','tree_redwood.png',         [ 23,  82,  26]],
+  ['tree_willow', 'tree_willow.png',          [ 51, 112,  45]],
+  ['tree_palm',   'tree_palm.png',            [ 51, 140,  46]],
+  ['tree_cactus', 'tree_cactus.png',          [ 51, 128,  61]],
+  ['tree_bush',   'tree_bush.png',            [ 41, 107,  36]],
+  ['tree_dead',   'tree_dead.png',            [ 76,  63,  48]]
+];
+
 const assets = Object.create(null);
+const assetPaths = Object.create(null);
+
+/* Fan-out per tree variant, so meshes can look up their texture by name. */
+const TREE_TEXTURE_KEY = {
+  oak:     'tree_oak',
+  pine:    'tree_pine',
+  birch:   'tree_birch',
+  maple:   'tree_maple',
+  spruce:  'tree_spruce',
+  redwood: 'tree_redwood',
+  willow:  'tree_willow',
+  palm:    'tree_palm',
+  cactus:  'tree_cactus',
+  bush:    'tree_bush',
+  dead:    'tree_dead'
+};
 
 function nextPOT(n) {
   let p = 1;
@@ -312,8 +619,6 @@ function nextPOT(n) {
   return p;
 }
 
-/* WebGL1 + WebGL2 both like power-of-two textures when we want REPEAT and
-   mipmaps, so any odd-sized PNG gets resampled onto a POT canvas first. */
 function toPowerOfTwo(img) {
   const w = img.width || img.naturalWidth || 0;
   const h = img.height || img.naturalHeight || 0;
@@ -322,19 +627,18 @@ function toPowerOfTwo(img) {
   if (pw === w && ph === h) return img;
 
   const c = document.createElement('canvas');
-  c.width = pw;
-  c.height = ph;
+  c.width = pw; c.height = ph;
   const ctx = c.getContext('2d');
   ctx.drawImage(img, 0, 0, pw, ph);
   return c;
 }
 
-function makeFallbackTexture(r, g, b, a = 255) {
+function makeFallbackTexture(r, g, b, a) {
   if (!gl) return null;
   const tex = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA,
-                gl.UNSIGNED_BYTE, new Uint8Array([r, g, b, a]));
+                gl.UNSIGNED_BYTE, new Uint8Array([r, g, b, a == null ? 255 : a]));
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
@@ -343,76 +647,108 @@ function makeFallbackTexture(r, g, b, a = 255) {
   return tex;
 }
 
-function loadAssetTexture(name, fallback) {
-  if (!gl) return null;
+const _loadListeners = [];
 
-  const tex = makeFallbackTexture(fallback[0], fallback[1], fallback[2], 255);
-  const entry = { texture: tex, loaded: false, failed: false, path: assetPaths[name] };
+function loadAssetTexture(name, filename, fallback) {
+  if (!gl) return null;
+  const path = ASSET_ROOT + filename;
+  assetPaths[name] = path;
+
+  const tex = makeFallbackTexture(fallback[0], fallback[1], fallback[2]);
+  const entry = {
+    texture: tex,
+    loaded: false,
+    failed: false,
+    path: path,
+    name: name
+  };
   assets[name] = entry;
 
   const img = new Image();
+  /* Do NOT set crossOrigin — breaks file:// usage in some browsers. */
   img.onload = () => {
-    const src = toPowerOfTwo(img);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA,
-                  gl.UNSIGNED_BYTE, src);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    entry.loaded = true;
-    entry.width = src.width;
-    entry.height = src.height;
+    try {
+      const src = toPowerOfTwo(img);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA,
+                    gl.UNSIGNED_BYTE, src);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER,
+                       gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      entry.loaded = true;
+      entry.width  = src.width || src.naturalWidth;
+      entry.height = src.height || src.naturalHeight;
+      for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
+    } catch (err) {
+      entry.failed = true;
+      console.warn('[Models] texture upload failed for', path, err);
+    }
   };
   img.onerror = () => {
-    /* Missing assets are expected until the user adds them.
-       The 1x1 fallback colour stays bound, so nothing breaks. */
     entry.failed = true;
+    /* Missing assets are expected — silent, keep fallback colour. */
+    for (const cb of _loadListeners) { try { cb(entry); } catch (e) {} }
   };
-  img.src = assetPaths[name];
+  img.src = path;
   return tex;
 }
 
 function loadAssets() {
-  loadAssetTexture('plane',     [224, 61, 41]);
-  loadAssetTexture('propeller', [58, 59, 69]);
-  loadAssetTexture('tree',      [38, 115, 38]);
+  for (const [name, file, fb] of TEXTURE_DEFS) {
+    loadAssetTexture(name, file, fb);
+  }
+}
+
+function onAssetsLoaded(cb) {
+  _loadListeners.push(cb);
+  /* Fire immediately for any already-resolved entries. */
+  for (const k in assets) {
+    const e = assets[k];
+    if (e.loaded || e.failed) { try { cb(e); } catch (_) {} }
+  }
+}
+
+function registerTexture(name, filename, fallbackRGB) {
+  const fb = fallbackRGB || [200, 200, 200];
+  return loadAssetTexture(name, filename, fb);
 }
 
 /* =========================================================================
    MODEL REGISTRY
    ========================================================================= */
-const TREE_KINDS = ['oak', 'pine', 'birch', 'bush', 'dead'];
-
-/* Per-variant [minScale, maxScale]. */
-const TREE_SCALE = {
-  oak:   [0.80, 1.30],
-  pine:  [0.85, 1.35],
-  birch: [0.75, 1.15],
-  bush:  [0.80, 1.45],
-  dead:  [0.85, 1.25]
-};
+const TREE_KINDS = Object.keys(TREE_DEFS);
 
 const models = {
   planeMesh: null,
-  propMesh: null,
-  treeMesh: null,                     // default tree (oak) — legacy alias
-  treeMeshes: Object.create(null),    // { oak, pine, birch, bush, dead }
-  treeVariants: TREE_KINDS.slice(),
-  TREE_SCALE,
+  propMesh:  null,
+  treeMesh:  null,                     // default tree (oak) — legacy alias
+  treeMeshes: Object.create(null),     // { oak, pine, ... }
+  treeVariants: TREE_KINDS,
+  TREE_DEFS: TREE_DEFS,
+  BIOME_TREES: BIOME_TREES,
   assets,
   assetPaths,
-  uv: { plane: PLANE_UV_SCALE, prop: PROP_UV_SCALE },
+  onAssetsLoaded,
+  registerTexture,
+  getBiome,
+  SEA_LEVEL,
+  uv: {
+    plane: PLANE_UV_SCALE,
+    prop:  PROP_UV_SCALE,
+    tree:  TREE_UV_SCALE
+  },
 
   /* Renderer helper: resolves the mesh for a spawned tree object. */
   getTreeMesh(obj) {
     if (!obj) return models.treeMesh;
     if (obj.mesh) return obj.mesh;
-    const k = obj.variant || obj.kind || obj.type;
+    const k = obj.variant || obj.kind;
     return (k && models.treeMeshes[k]) || models.treeMesh;
   }
 };
@@ -420,22 +756,23 @@ const models = {
 function init(glContext) {
   gl = glContext;
 
-  /* Textures first: the fallback 1x1 is created synchronously and the real
-     PNG swaps itself in later, so mesh.texture stays valid forever. */
+  /* Textures first: 1x1 fallbacks are created synchronously; the real PNGs
+     swap in asynchronously.  Meshes hold a stable WebGLTexture reference, so
+     they automatically pick up the real image when it arrives. */
   loadAssets();
 
   const planeTex = assets.plane ? assets.plane.texture : null;
   const propTex  = assets.propeller ? assets.propeller.texture : null;
-  const treeTex  = USE_TREE_TEXTURE && assets.tree ? assets.tree.texture : null;
 
   models.planeMesh = buildPlaneMesh(planeTex);
   models.propMesh  = buildPropMesh(propTex);
 
-  models.treeMeshes.oak   = buildOakMesh(treeTex);
-  models.treeMeshes.pine  = buildPineMesh(treeTex);
-  models.treeMeshes.birch = buildBirchMesh(treeTex);
-  models.treeMeshes.bush  = buildBushMesh(treeTex);
-  models.treeMeshes.dead  = buildDeadTreeMesh(treeTex);
+  for (const kind of TREE_KINDS) {
+    const def = TREE_DEFS[kind];
+    const texKey = TREE_TEXTURE_KEY[kind];
+    const tex = (texKey && assets[texKey]) ? assets[texKey].texture : null;
+    models.treeMeshes[kind] = def.build(tex);
+  }
   models.treeMesh = models.treeMeshes.oak;
 }
 
@@ -447,20 +784,6 @@ const CHUNK_SEG = 12;
 const VIEW_RADIUS = 6;
 const CHUNK_BUDGET_MS = 5;
 const chunks = new Map();
-
-function pickTreeKind(y, r) {
-  if (y > 46) return r < 0.65 ? 'pine' : 'dead';                 // high ground
-  if (y > 28) {                                                  // hillside
-    if (r < 0.42) return 'pine';
-    if (r < 0.78) return 'oak';
-    if (r < 0.92) return 'birch';
-    return 'dead';
-  }
-  if (r < 0.34) return 'oak';                                    // lowlands
-  if (r < 0.62) return 'birch';
-  if (r < 0.84) return 'bush';
-  return 'pine';
-}
 
 function buildChunk(cx, cz) {
   const N = CHUNK_SEG + 1;
@@ -527,7 +850,7 @@ function buildChunk(cx, cz) {
   /* Deterministic forest: the same chunk always gets the same layout. */
   const objects = [];
   const seed = (cx * 73856093) ^ (cz * 19349663);
-  const count = 3 + ((Math.abs(seed) >>> 0) % 4);
+  const count = 4 + ((Math.abs(seed) >>> 0) % 5);   // 4..8 attempts
 
   for (let i = 0; i < count; i++) {
     const r1 = hash2(cx * 31 + i * 17, cz * 47 + i * 13);
@@ -536,23 +859,35 @@ function buildChunk(cx, cz) {
     const r4 = hash2(cx * 131 + i * 41 + 11, cz * 157 + i * 19 + 23);
     const r5 = hash2(cx * 173 + i * 59 + 29, cz * 199 + i * 31 + 17);
 
-    const x = ox + 18 + r1 * (CHUNK_SIZE - 36);
-    const z = oz + 18 + r2 * (CHUNK_SIZE - 36);
+    const x = ox + 12 + r1 * (CHUNK_SIZE - 24);
+    const z = oz + 12 + r2 * (CHUNK_SIZE - 24);
     const y = terrainHeight(x, z);
 
-    /* Keep the original spawn area clear so the start still feels identical. */
+    /* Keep the original spawn area clear. */
     if (Math.hypot(x, z) < 90) continue;
 
-    /* Trees stay on reasonable ground and avoid deep water. */
-    if (y < 2 || y > 72) continue;
+    const biome = getBiome(x, z, y);
 
-    const kind = pickTreeKind(y, r4);
-    const range = TREE_SCALE[kind] || [1, 1];
+    /* Never spawn trees under water. */
+    if (y < SEA_LEVEL - 0.5) continue;
+
+    /* Reject extreme slopes (trees don't grow on vertical cliff faces). */
+    const s = 1.5;
+    const dx = terrainHeight(x + s, z) - terrainHeight(x - s, z);
+    const dz = terrainHeight(x, z + s) - terrainHeight(x, z - s);
+    const slope = Math.hypot(dx, dz) / (2 * s);
+    if (slope > 1.1) continue;
+
+    const kind = pickTreeForBiome(biome, y, r4);
+    if (!kind) continue;
+
+    const range = TREE_DEFS[kind].scale;
     const scale = range[0] + r5 * (range[1] - range[0]);
 
     objects.push({
       type: 'tree',
       variant: kind,
+      biome: biome,
       mesh: models.treeMeshes[kind] || models.treeMesh,
       position: [x, y, z],
       rotation: r3 * Math.PI * 2,
@@ -604,9 +939,14 @@ function initTerrain(glContext) {
   gl = glContext;
 }
 
+/* =========================================================================
+   EXPORTS
+   ========================================================================= */
 global.Terrain = {
   init: initTerrain,
   terrainHeight,
+  getBiome,
+  SEA_LEVEL,
   createMesh,
   deleteMesh,
   boxBuilder,
