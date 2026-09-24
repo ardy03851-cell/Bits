@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Skying simulator Block</title>
+  <title>SKYCUBE · FLIGHT</title>
   <style>
     /* =========================================================================
    SkyCube UI — v3
@@ -1228,6 +1228,152 @@
       .shop-panel { padding: 12px; }
       .shop-card #colorWheel { width: 104px; height: 104px; }
       .paint-row { grid-template-columns: 112px 1fr; }
+    }
+
+
+    /* =====================================================================
+       SHOP POLISH / COLLECTION / STICKERS
+       ===================================================================== */
+    .shop-card {
+      border-radius: 18px;
+      border: 1px solid rgba(230,220,194,.20);
+      background:
+        radial-gradient(circle at 18% 0%, rgba(232,180,90,.08), transparent 28%),
+        linear-gradient(145deg, rgba(25,29,35,.98), rgba(8,11,16,.97));
+      box-shadow: 0 34px 100px rgba(0,0,0,.68), inset 0 1px 0 rgba(255,255,255,.08);
+    }
+    .shop-card::after {
+      content: '';
+      position: absolute;
+      inset: 1px;
+      border-radius: 17px;
+      pointer-events: none;
+      border: 1px solid rgba(255,255,255,.025);
+    }
+    .shop-top {
+      height: 60px;
+      padding: 0 22px;
+      background: linear-gradient(180deg, rgba(255,255,255,.035), transparent);
+    }
+    .shop-top > span:first-child::before {
+      content: '✦';
+      color: #e8b45a;
+      margin-right: 9px;
+    }
+    #shopCash {
+      padding: 8px 11px;
+      border: 1px solid rgba(232,180,90,.18);
+      border-radius: 10px;
+      background: rgba(232,180,90,.055);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .shop-panel {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(230,220,194,.25) transparent;
+    }
+    .shop-tabs {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 5px;
+      margin: 0 0 14px;
+      padding: 4px;
+      border: 1px solid rgba(230,220,194,.09);
+      border-radius: 12px;
+      background: rgba(0,0,0,.18);
+    }
+    .shop-tab {
+      min-height: 36px;
+      border: 0;
+      border-radius: 8px;
+      color: rgba(230,220,194,.45);
+      background: transparent;
+      font: 800 9px ui-monospace,monospace;
+      letter-spacing: .12em;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: transform .16s ease, background .16s ease, color .16s ease, box-shadow .16s ease;
+    }
+    .shop-tab:hover { color: rgba(230,220,194,.78); background: rgba(255,255,255,.035); }
+    .shop-tab.active {
+      color: #17130d;
+      background: #e8b45a;
+      box-shadow: 0 4px 14px rgba(232,180,90,.18), inset 0 1px 0 rgba(255,255,255,.38);
+      transform: translateY(-1px);
+    }
+    .shop-view { display: none; animation: shop-view-in .22s cubic-bezier(.2,.75,.2,1); }
+    .shop-view.active { display: block; }
+    @keyframes shop-view-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+    .plane-choice {
+      min-height: 62px;
+      border-radius: 11px;
+      padding: 10px 12px;
+      background: linear-gradient(135deg, rgba(255,255,255,.045), rgba(255,255,255,.018));
+      transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+    }
+    .plane-choice:hover { transform: translateX(2px); }
+    .plane-choice:active { transform: scale(.985); }
+    .plane-choice.selected { border-color: rgba(232,180,90,.7); box-shadow: inset 3px 0 0 #e8b45a, 0 5px 20px rgba(0,0,0,.14); }
+    .paint-row { padding: 10px; border: 1px solid rgba(230,220,194,.08); border-radius: 14px; background: rgba(255,255,255,.018); }
+    #colorWheel { box-shadow: inset 0 0 0 2px rgba(255,255,255,.12), 0 14px 30px rgba(0,0,0,.32); transition: transform .2s ease; }
+    #colorWheel:active { transform: scale(.97); }
+    #buyColorBtn, #flyAgainBtn {
+      border-radius: 10px;
+      min-height: 42px;
+      box-shadow: 0 8px 20px rgba(232,180,90,.13), inset 0 1px 0 rgba(255,255,255,.35);
+      transition: transform .14s ease, filter .14s ease, box-shadow .14s ease;
+    }
+    #buyColorBtn:hover:not(:disabled), #flyAgainBtn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+    #buyColorBtn:active:not(:disabled), #flyAgainBtn:active:not(:disabled), #flyAgainBtn.pressed { transform: scale(.97); filter: brightness(.94); }
+    #flyAgainBtn { min-width: 220px; max-width: 280px; }
+    #flyAgainBtn::before { content: '↻'; margin-right: 8px; font-size: 13px; }
+    #ownedColors { gap: 7px; }
+    .owned-color, .collection-color {
+      width: 30px; height: 30px; border-radius: 9px; position: relative;
+      transition: transform .15s ease, box-shadow .15s ease;
+    }
+    .owned-color:hover, .collection-color:hover { transform: translateY(-2px) scale(1.04); }
+    .owned-color.selected, .collection-color.selected { box-shadow: 0 0 0 2px #e8b45a, 0 5px 14px rgba(0,0,0,.35); }
+    .collection-color { background: var(--swatch); border: 1px solid rgba(255,255,255,.25); cursor:pointer; }
+    .collection-color::after { content:'✓'; opacity:0; position:absolute; inset:0; display:grid; place-items:center; color:white; font-weight:900; text-shadow:0 1px 4px #000; }
+    .collection-color.selected::after { opacity:1; }
+    #stickerGrid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    .sticker-card {
+      position:relative; min-width:0; padding:9px; display:grid; grid-template-columns:50px 1fr; grid-template-rows:auto auto; column-gap:9px;
+      border:1px solid rgba(230,220,194,.10); border-radius:12px; color:#e9dfca; background:rgba(255,255,255,.025); cursor:pointer; text-align:left;
+      transition: transform .16s ease, border-color .16s ease, background .16s ease;
+    }
+    .sticker-card:hover { transform:translateY(-2px); background:rgba(255,255,255,.05); border-color:rgba(230,220,194,.22); }
+    .sticker-card:active { transform:scale(.98); }
+    .sticker-card.selected { border-color:rgba(232,180,90,.75); background:rgba(232,180,90,.07); }
+    .sticker-thumb { grid-row:1 / span 2; width:50px; height:50px; border-radius:9px; display:grid; place-items:center; overflow:hidden; background:repeating-conic-gradient(rgba(255,255,255,.05) 0 25%, transparent 0 50%) 0/12px 12px; border:1px solid rgba(255,255,255,.1); }
+    .sticker-thumb img { max-width:100%; max-height:100%; object-fit:contain; }
+    .sticker-name { align-self:end; font-size:9px; font-weight:800; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .sticker-price { align-self:start; margin-top:4px; font-size:7px; color:rgba(230,220,194,.45); letter-spacing:.08em; }
+    .sticker-empty { padding:24px 10px; text-align:center; border:1px dashed rgba(230,220,194,.13); border-radius:12px; color:rgba(230,220,194,.48); }
+    .sticker-empty b { display:block; color:#e9dfca; font-size:10px; margin-bottom:7px; }
+    .sticker-empty span { display:block; font-size:8px; line-height:1.6; }
+    .sticker-empty code { color:#e8b45a; }
+    #stickerStatus { margin-top:9px; font-size:7px; color:rgba(230,220,194,.36); letter-spacing:.1em; line-height:1.5; }
+    #ownedSummary { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-bottom:14px; }
+    .owned-stat { padding:11px 8px; text-align:center; border:1px solid rgba(230,220,194,.09); border-radius:11px; background:rgba(255,255,255,.025); }
+    .owned-stat b { display:block; color:#e8b45a; font-size:17px; }
+    .owned-stat span { color:rgba(230,220,194,.4); font-size:7px; letter-spacing:.12em; }
+    .owned-section { margin-top:13px; padding-top:12px; border-top:1px solid rgba(230,220,194,.08); }
+    .owned-section > b { display:block; margin-bottom:8px; color:rgba(230,220,194,.42); font-size:8px; letter-spacing:.14em; }
+    #ownedColorsCollection, #ownedStickersCollection { display:flex; flex-wrap:wrap; gap:7px; }
+    .owned-sticker { width:68px; padding:5px; border:1px solid rgba(230,220,194,.1); border-radius:9px; background:rgba(255,255,255,.025); color:rgba(230,220,194,.55); cursor:pointer; }
+    .owned-sticker img { width:50px; height:42px; object-fit:contain; display:block; margin:auto; }
+    .owned-sticker span { display:block; margin-top:3px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:7px; }
+    .owned-sticker.selected { border-color:#e8b45a; box-shadow:0 0 0 1px rgba(232,180,90,.3); }
+    .owned-none { color:rgba(230,220,194,.35); font-size:8px; }
+    @media (max-width:760px) {
+      .shop-card { border-radius:14px; }
+      .shop-tabs { position:sticky; top:0; z-index:3; }
+      .shop-tab { min-height:40px; }
+      #stickerGrid { grid-template-columns:1fr 1fr; }
+      .shop-actions { padding:9px 12px; }
+      #flyAgainBtn { min-width:0; width:45%; }
+      #shopReward { flex:1; line-height:1.4; }
     }
 
   </style>

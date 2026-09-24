@@ -50,7 +50,9 @@ function loadShopState() {
     selectedPlane: 'starter',
     selectedColor: '#e53b2f',
     activeColor: '#e53b2f',
-    lastReward: 0
+    lastReward: 0,
+    stickers: [],
+    selectedSticker: null
   };
   try {
     const raw = localStorage.getItem(SHOP_STORAGE_KEY);
@@ -69,6 +71,8 @@ function loadShopState() {
       s.activeColor = String(s.ownedColors[0]).toLowerCase();
     }
     if (!/^#[0-9a-f]{6}$/i.test(s.selectedColor)) s.selectedColor = s.activeColor;
+    s.stickers = Array.isArray(s.stickers) ? s.stickers.filter(v => typeof v === 'string') : [];
+    s.selectedSticker = typeof s.selectedSticker === 'string' ? s.selectedSticker : null;
     return s;
   } catch (e) {
     return fallback;
@@ -181,9 +185,14 @@ const UI = (function buildUI() {
             '</div>',
             '<div id="shopPlaneDescription"></div>',
             '<div id="shopStats"></div>',
-            '<div class="shop-section-title">AIRCRAFT</div>',
-            '<div id="planeList"></div>',
-            '<div class="shop-section-title">PAINT / COLOUR</div>',
+            '<div class="shop-tabs" role="tablist">',
+              '<button class="shop-tab active" data-tab="aircraft">AIRCRAFT</button>',
+              '<button class="shop-tab" data-tab="paint">PAINT</button>',
+              '<button class="shop-tab" data-tab="stickers">STICKERS</button>',
+              '<button class="shop-tab" data-tab="owned">OWNED</button>',
+            '</div>',
+            '<div class="shop-view active" data-view="aircraft"><div id="planeList"></div></div>',
+            '<div class="shop-view" data-view="paint">',
             '<div class="paint-row">',
               '<div id="colorWheel" aria-label="Choose a colour">',
                 '<div id="colorKnob"></div>',
@@ -195,6 +204,8 @@ const UI = (function buildUI() {
                 '<div id="ownedColors"></div>',
               '</div>',
             '</div>',
+            '<div class="shop-view" data-view="stickers"><div id="stickerGrid"></div><div id="stickerStatus">STICKERS ARE FREE · DROP PNG FILES INTO /STICKERS</div></div>',
+            '<div class="shop-view" data-view="owned"><div id="ownedSummary"></div><div class="owned-section"><b>OWNED COLOURS</b><div id="ownedColorsCollection"></div></div><div class="owned-section"><b>OWNED STICKERS</b><div id="ownedStickersCollection"></div></div></div>',
           '</div>',
         '</div>',
         '<div class="shop-actions">',
@@ -240,6 +251,13 @@ const UI = (function buildUI() {
     selectedColorText: document.getElementById('selectedColorText'),
     buyColorBtn: document.getElementById('buyColorBtn'),
     ownedColors: document.getElementById('ownedColors'),
+    stickerGrid: document.getElementById('stickerGrid'),
+    stickerStatus: document.getElementById('stickerStatus'),
+    ownedSummary: document.getElementById('ownedSummary'),
+    ownedColorsCollection: document.getElementById('ownedColorsCollection'),
+    ownedStickersCollection: document.getElementById('ownedStickersCollection'),
+    shopTabs: root.querySelectorAll('.shop-tab'),
+    shopViews: root.querySelectorAll('.shop-view'),
     shopReward: document.getElementById('shopReward'),
     flyAgainBtn: document.getElementById('flyAgainBtn')
   };
@@ -367,6 +385,101 @@ function renderOwnedColors() {
   });
 }
 
+
+let activeShopTab = 'aircraft';
+let stickerCatalog = [];
+let stickerScanPromise = null;
+
+function setShopTab(tab) {
+  activeShopTab = tab;
+  UI.shopTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+  UI.shopViews.forEach(view => view.classList.toggle('active', view.dataset.view === tab));
+  if (tab === 'stickers' || tab === 'owned') loadStickers();
+}
+UI.shopTabs.forEach(btn => btn.addEventListener('click', e => {
+  e.preventDefault();
+  setShopTab(btn.dataset.tab);
+}));
+
+function stickerLabel(file) {
+  return file.replace(/^.*\//, '').replace(/\.png$/i, '').replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function discoverStickers() {
+  try {
+    const res = await fetch('stickers/', { cache: 'no-store' });
+    if (!res.ok) throw new Error('sticker directory unavailable');
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const links = [...doc.querySelectorAll('a[href]')];
+    const files = links.map(a => a.getAttribute('href')).filter(h => h && /\.png(?:\?|$)/i.test(h));
+    return [...new Set(files.map(h => {
+      try { return new URL(h, new URL('stickers/', location.href)).href; } catch { return null; }
+    }).filter(Boolean))].map(url => ({ url, name: stickerLabel(url) }));
+  } catch (e) {
+    return [];
+  }
+}
+
+function renderStickerGrid() {
+  if (!UI.stickerGrid) return;
+  if (!stickerCatalog.length) {
+    UI.stickerGrid.innerHTML = '<div class="sticker-empty"><b>NO STICKERS FOUND</b><span>Add PNGs to <code>/stickers</code>. If your host hides folder listings, use a host with directory indexing enabled.</span></div>';
+    UI.stickerStatus.textContent = 'FREE STICKERS · AUTOMATIC FOLDER DISCOVERY';
+    return;
+  }
+  UI.stickerGrid.innerHTML = stickerCatalog.map((st, i) => {
+    const owned = shopState.stickers.includes(st.url);
+    const selected = shopState.selectedSticker === st.url;
+    return '<button class="sticker-card ' + (selected ? 'selected ' : '') + '" data-sticker="' + encodeURIComponent(st.url) + '">' +
+      '<span class="sticker-thumb"><img src="' + st.url.replace(/"/g, '&quot;') + '" alt=""></span>' +
+      '<span class="sticker-name">' + st.name.replace(/</g,'&lt;') + '</span>' +
+      '<span class="sticker-price">' + (selected ? 'EQUIPPED' : owned ? 'OWNED · TAP TO EQUIP' : 'FREE · TAP TO EQUIP') + '</span></button>';
+  }).join('');
+  UI.stickerGrid.querySelectorAll('.sticker-card').forEach(btn => btn.addEventListener('click', e => {
+    e.preventDefault();
+    const url = decodeURIComponent(btn.dataset.sticker);
+    if (!shopState.stickers.includes(url)) shopState.stickers.push(url);
+    shopState.selectedSticker = url;
+    saveShopState();
+    renderStickerGrid();
+    renderOwnedCollection();
+    showMessage('STICKER EQUIPPED', 800);
+  }));
+}
+
+async function loadStickers() {
+  if (stickerScanPromise) return stickerScanPromise;
+  stickerScanPromise = discoverStickers().then(list => {
+    stickerCatalog = list;
+    // Preserve ownership even if a host temporarily hides the directory listing.
+    renderStickerGrid();
+    renderOwnedCollection();
+    return list;
+  }).finally(() => { stickerScanPromise = null; });
+  return stickerScanPromise;
+}
+
+function renderOwnedCollection() {
+  if (!UI.ownedSummary) return;
+  const colorCount = shopState.ownedColors.length;
+  const stickerCount = shopState.stickers.length;
+  const planeCount = Object.values(shopState.ownedPlanes).filter(Boolean).length;
+  UI.ownedSummary.innerHTML = '<div class="owned-stat"><b>' + planeCount + '</b><span>AIRCRAFT</span></div>' +
+    '<div class="owned-stat"><b>' + colorCount + '</b><span>COLOURS</span></div>' +
+    '<div class="owned-stat"><b>' + stickerCount + '</b><span>STICKERS</span></div>';
+  UI.ownedColorsCollection.innerHTML = shopState.ownedColors.map(c => '<button class="collection-color ' + (c.toLowerCase() === shopState.activeColor.toLowerCase() ? 'selected' : '') + '" data-color="' + c + '" style="--swatch:' + c + '" title="' + c + '"></button>').join('');
+  UI.ownedColorsCollection.querySelectorAll('.collection-color').forEach(b => b.addEventListener('click', () => {
+    shopState.activeColor = b.dataset.color.toLowerCase();
+    shopState.selectedColor = shopState.activeColor;
+    saveShopState(); updateShopUI(); showMessage('COLOUR EQUIPPED', 700);
+  }));
+  UI.ownedStickersCollection.innerHTML = shopState.stickers.length ? shopState.stickers.map(url => '<button class="owned-sticker ' + (url === shopState.selectedSticker ? 'selected' : '') + '" data-sticker="' + encodeURIComponent(url) + '"><img src="' + url + '" alt=""><span>' + stickerLabel(url) + '</span></button>').join('') : '<span class="owned-none">No stickers equipped yet.</span>';
+  UI.ownedStickersCollection.querySelectorAll('.owned-sticker').forEach(b => b.addEventListener('click', () => {
+    shopState.selectedSticker = decodeURIComponent(b.dataset.sticker); saveShopState(); renderOwnedCollection(); renderStickerGrid();
+  }));
+}
+
 function updateShopUI() {
   const def = PlaneModels.get(planeModelId);
   UI.shopCash.textContent = 'CASH $' + Math.floor(shopState.money);
@@ -396,6 +509,8 @@ function updateShopUI() {
   updateColorWheelKnob();
   renderPlaneList();
   renderOwnedColors();
+  renderOwnedCollection();
+  if (activeShopTab === 'stickers' || activeShopTab === 'owned') loadStickers();
 }
 
 UI.buyColorBtn.addEventListener('click', e => {
@@ -434,8 +549,17 @@ function closeShop() {
 
 UI.flyAgainBtn.addEventListener('click', e => {
   e.preventDefault();
-  closeShop();
-  respawn();
+  e.stopPropagation();
+  UI.flyAgainBtn.disabled = true;
+  UI.flyAgainBtn.classList.add('pressed');
+  window.setTimeout(() => {
+    crashTimer = 0;
+    closeShop();
+    respawn();
+    UI.flyAgainBtn.disabled = false;
+    UI.flyAgainBtn.classList.remove('pressed');
+    showMessage('READY TO FLY', 700);
+  }, 120);
 });
 
 updateShopUI();
@@ -1030,7 +1154,6 @@ window.addEventListener('keydown', e => {
   }
   if (e.code === 'Escape' && shopOpen) {
     closeShop();
-    respawn();
   }
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
