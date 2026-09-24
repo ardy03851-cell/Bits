@@ -1,8 +1,21 @@
-
 "use strict";
 /* =========================================================================
    SkyCube — main game logic
    Terrain generation lives in models.js (Terrain.*)
+
+   CHANGES IN THIS VERSION
+   -------------------------------------------------------------------------
+   • Model shader now consumes attribute 3 (UV) and a sampler2D, so
+     plane.png / propeller.png / tree_*.png actually appear.
+   • Each mesh is drawn with its own texture (mesh.texture) — plane,
+     propeller and every tree variant use their own image.
+   • Trees render the correct variant mesh (Models.getTreeMesh(obj))
+     instead of always drawing the default oak.
+   • Water waves: layered directional sines with irrational frequency
+     ratios plus two octaves of value noise, so ripples no longer line up
+     into an obvious grid.
+   • Lighting: subtle sky/ground hemisphere tint on models, slightly
+     warmer sun bounce on terrain.  Same overall look, gentler falloff.
    ========================================================================= */
 
 const canvas = document.getElementById('glcanvas');
@@ -180,7 +193,7 @@ function locs(p, names) {
   return o;
 }
 
-/* ---- sky (brighter, warmer) ---- */
+/* ---- sky ---- */
 const skyProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec2 aPos;
@@ -204,11 +217,10 @@ void main(){
   col = mix(col, uGroundColor, smoothstep(0.0, -0.22, up));
 
   float sd = max(dot(d, uSunDir), 0.0);
-  // Bigger, warmer sun presence
-  col += uSunColor * pow(sd, 1200.0) * 18.0;   // disc
-  col += uSunColor * pow(sd, 40.0)   * 0.55;   // tight glow
-  col += uSunColor * pow(sd, 6.0)    * 0.14;   // wide haze
-  col += uSunColor * pow(sd, 2.0)    * 0.05;   // sky warmth
+  col += uSunColor * pow(sd, 1200.0) * 18.0;
+  col += uSunColor * pow(sd, 40.0)   * 0.55;
+  col += uSunColor * pow(sd, 6.0)    * 0.14;
+  col += uSunColor * pow(sd, 2.0)    * 0.05;
 
   fragColor = vec4(col, 1.0);
 }`);
@@ -244,7 +256,6 @@ void main(){
   float slope = 1.0 - clamp(n.y, 0.0, 1.0);
   float h = vWorld.y;
 
-  // Warmer, more inviting palette
   vec3 sand   = vec3(0.86, 0.79, 0.58);
   vec3 grass  = vec3(0.28, 0.46, 0.18);
   vec3 grass2 = vec3(0.40, 0.55, 0.24);
@@ -258,18 +269,20 @@ void main(){
   albedo = mix(albedo, snow, smoothstep(58.0, 88.0, h) * (1.0 - smoothstep(0.52, 0.82, slope)));
 
   float ndl = max(dot(n, uSunDir), 0.0);
-  // Warmer ambient — bounce light from sky
-  vec3 ambient = mix(vec3(0.20, 0.22, 0.26), vec3(0.42, 0.46, 0.54), n.y * 0.5 + 0.5);
+  /* Subtle sky/ground hemisphere bounce — slightly warmer toward the sky */
+  vec3 skyAmb = vec3(0.42, 0.46, 0.55);
+  vec3 gndAmb = vec3(0.22, 0.20, 0.18);
+  vec3 ambient = mix(gndAmb, skyAmb, n.y * 0.5 + 0.5);
 
-  vec3 col = albedo * (ambient + uSunColor * ndl * 1.15);
+  vec3 col = albedo * (ambient + uSunColor * ndl * 1.12);
 
-  // Soft sky rim
-  float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 4.0) * 0.16;
+  /* Soft sky rim */
+  float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 4.0) * 0.14;
   col += uSunColor * rim;
 
-  // Warm glow when looking toward the sun
+  /* Warm glow toward the sun */
   float sunAmount = pow(max(dot(viewDir, uSunDir), 0.0), 5.0);
-  col += uSunColor * sunAmount * 0.14;
+  col += uSunColor * sunAmount * 0.12;
 
   float fog = smoothstep(uFogNear, uFogFar, dist);
   col = mix(col, uFogColor, fog);
@@ -277,28 +290,34 @@ void main(){
 }`);
 const terrU = locs(terrainProg, ['uViewProj','uCamPos','uSunDir','uSunColor','uFogColor','uFogNear','uFogFar']);
 
-/* ---- models ---- */
+/* ---- models (plane, propeller, trees) — NOW TEXTURED ---- */
 const modelProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
 layout(location=1) in vec3 aNrm;
 layout(location=2) in vec3 aCol;
+layout(location=3) in vec2 aUv;
 uniform mat4 uViewProj;
 uniform mat4 uModel;
 out vec3 vWorld;
 out vec3 vNrm;
 out vec3 vCol;
+out vec2 vUv;
 void main(){
   vec4 wp = uModel * vec4(aPos, 1.0);
   vWorld = wp.xyz;
   vNrm = mat3(uModel) * aNrm;
   vCol = aCol;
+  vUv  = aUv;
   gl_Position = uViewProj * wp;
 }`, `#version 300 es
 precision highp float;
 in vec3 vWorld;
 in vec3 vNrm;
 in vec3 vCol;
+in vec2 vUv;
+uniform sampler2D uTexture;
+uniform float uHasTexture;
 uniform vec3 uCamPos, uSunDir, uSunColor, uFogColor;
 uniform float uFogNear, uFogFar;
 out vec4 fragColor;
@@ -308,15 +327,34 @@ void main(){
   float dist = length(toCam);
   vec3 viewDir = toCam / max(dist, 1e-4);
   if (dot(n, viewDir) < 0.0) n = -n;
+
+  /* Sample the texture if one is bound; otherwise fall back to vertex colours */
+  vec4 texSample = texture(uTexture, vUv);
+  /* Slight boost so a mid-tone PNG reads at roughly the same value as the
+     original vertex colours did. */
+  vec3 texCol = texSample.rgb * 1.15;
+  vec3 albedo = mix(vCol, texCol, uHasTexture);
+
   float ndl = max(dot(n, uSunDir), 0.0);
-  float amb = 0.38 + 0.24 * (n.y * 0.5 + 0.5);
-  vec3 col = vCol * (amb + uSunColor * ndl * 1.30);
+
+  /* Subtle sky/ground hemisphere ambient (gentler than before) */
+  vec3 skyAmb = vec3(0.34, 0.40, 0.50);
+  vec3 gndAmb = vec3(0.20, 0.18, 0.16);
+  vec3 amb = mix(gndAmb, skyAmb, n.y * 0.5 + 0.5);
+
+  vec3 col = albedo * (amb + uSunColor * ndl * 1.22);
+
+  /* Soft specular */
   vec3 hv = normalize(uSunDir + viewDir);
-  col += uSunColor * pow(max(dot(n, hv), 0.0), 48.0) * 0.55;
+  col += uSunColor * pow(max(dot(n, hv), 0.0), 48.0) * 0.42;
+
   col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, dist));
   fragColor = vec4(col, 1.0);
 }`);
-const modelU = locs(modelProg, ['uViewProj','uModel','uCamPos','uSunDir','uSunColor','uFogColor','uFogNear','uFogFar']);
+const modelU = locs(modelProg, [
+  'uViewProj','uModel','uCamPos','uSunDir','uSunColor','uFogColor',
+  'uFogNear','uFogFar','uTexture','uHasTexture'
+]);
 
 /* ---- outlines ---- */
 const outlineProg = makeProgram(`#version 300 es
@@ -345,7 +383,12 @@ out vec4 fragColor;
 void main(){ fragColor = vec4(0.045, 0.050, 0.065, 1.0); }`);
 const outU = locs(outlineProg, ['uViewProj','uModel','uThickness','uResolution']);
 
-/* ---- water (sunlit, warmer highlights) ---- */
+/* ---- water ----
+   Waves are now built from five directional sines with irrational
+   frequency ratios plus three octaves of value noise.  Because the
+   frequencies are not simple multiples of each other, crests no longer
+   line up into an obvious repeating grid.
+------------------------------------------------------------------- */
 const waterProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -362,31 +405,87 @@ in vec3 vWorld;
 uniform vec3 uCamPos, uSunDir, uSunColor, uFogColor, uSkyHorizon;
 uniform float uFogNear, uFogFar, uTime;
 out vec4 fragColor;
+
+float hash21(vec2 p){
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+/* Layered wave field.  Each directional sine has its own slow time
+   multiplier, so the surface keeps evolving instead of pulsing. */
+float waveHeight(vec2 p, float t){
+  float h = 0.0;
+  h += sin(dot(p, vec2( 0.0413,  0.0271)) + t * 0.91) * 0.36;
+  h += sin(dot(p, vec2(-0.0239,  0.0371)) + t * 1.27) * 0.28;
+  h += sin(dot(p, vec2( 0.0671, -0.0513)) + t * 1.83) * 0.18;
+  h += sin(dot(p, vec2( 0.0131,  0.0831)) + t * 2.51) * 0.11;
+  h += sin(dot(p, vec2( 0.1523,  0.1177)) + t * 3.31) * 0.06;
+  /* Two octaves of noise, drifting at different speeds, break the
+     remaining regularity. */
+  h += (vnoise(p * 0.14 + t * 0.07) - 0.5) * 0.55;
+  h += (vnoise(p * 0.42 - t * 0.11) - 0.5) * 0.28;
+  h += (vnoise(p * 1.13 + t * 0.19) - 0.5) * 0.12;
+  return h;
+}
+
 void main(){
   vec3 toCam = uCamPos - vWorld;
   float dist = length(toCam);
   vec3 viewDir = toCam / max(dist, 1e-4);
+
   vec2 p = vWorld.xz;
-  vec3 n = normalize(vec3(
-    sin(p.x * 0.35 + uTime * 1.1) * 0.035 + sin(p.x * 0.09 - uTime * 0.6) * 0.05,
-    1.0,
-    cos(p.y * 0.31 + uTime * 0.9) * 0.035 + cos(p.y * 0.11 + uTime * 0.5) * 0.05
-  ));
+  float e = 0.55;
+  float hC = waveHeight(p, uTime);
+  float hL = waveHeight(p - vec2(e, 0.0), uTime);
+  float hR = waveHeight(p + vec2(e, 0.0), uTime);
+  float hD = waveHeight(p - vec2(0.0, e), uTime);
+  float hU = waveHeight(p + vec2(0.0, e), uTime);
+
+  float amp = 0.85;
+  vec3 n = normalize(vec3((hL - hR) * amp, 2.0 * e, (hD - hU) * amp));
+
+  /* Depth-ish tint from wave crest height */
+  float crest = clamp(hC * 0.5 + 0.5, 0.0, 1.0);
+
   float fres = pow(1.0 - max(dot(viewDir, n), 0.0), 3.0);
-  vec3 deep = vec3(0.055, 0.160, 0.235);
+  vec3 deep = mix(vec3(0.045, 0.130, 0.210), vec3(0.075, 0.205, 0.260), crest);
   vec3 col = mix(deep, uSkyHorizon, clamp(fres, 0.0, 1.0) * 0.85);
+
   vec3 hv = normalize(uSunDir + viewDir);
-  col += uSunColor * pow(max(dot(n, hv), 0.0), 380.0) * 2.6;
-  col += uSunColor * pow(max(dot(n, hv), 0.0), 22.0) * 0.14;
+  /* Tight sparkle + broader sheen */
+  col += uSunColor * pow(max(dot(n, hv), 0.0), 380.0) * 2.2;
+  col += uSunColor * pow(max(dot(n, hv), 0.0), 22.0)  * 0.13;
+
   col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, dist));
   fragColor = vec4(col, 1.0);
 }`);
-const waterU = locs(waterProg, ['uViewProj','uModel','uCamPos','uSunDir','uSunColor','uFogColor','uSkyHorizon','uFogNear','uFogFar','uTime']);
+const waterU = locs(waterProg, [
+  'uViewProj','uModel','uCamPos','uSunDir','uSunColor','uFogColor',
+  'uSkyHorizon','uFogNear','uFogFar','uTime'
+]);
 
 /* =========================================================================
    WORLD MODELS
    ========================================================================= */
 Models.init(gl);
+
+/* Optional: log which textures actually arrived, helpful when debugging. */
+if (Models.onAssetsLoaded) {
+  Models.onAssetsLoaded((entry) => {
+    if (entry.loaded) console.log('[SkyCube] texture loaded:', entry.path);
+    else if (entry.failed) console.warn('[SkyCube] texture missing:', entry.path);
+  });
+}
 
 /* =========================================================================
    WATER + SKY GEOMETRY
@@ -413,14 +512,14 @@ const skyMesh = (() => {
 })();
 
 /* =========================================================================
-   ATMOSPHERE  (positive, warm, sunlit)
+   ATMOSPHERE
    ========================================================================= */
 const SUN_DIR     = norm3([0.42, 0.50, -0.76]);
-const SUN_COLOR   = [1.00, 0.94, 0.80];   // warm sunlight
-const SKY_TOP     = [0.24, 0.47, 0.80];   // deeper, saturated blue
-const SKY_HORIZON = [0.86, 0.89, 0.93];   // bright hazy horizon
+const SUN_COLOR   = [1.00, 0.94, 0.80];
+const SKY_TOP     = [0.24, 0.47, 0.80];
+const SKY_HORIZON = [0.86, 0.89, 0.93];
 const SKY_GROUND  = [0.56, 0.62, 0.66];
-const FOG_COLOR   = [0.82, 0.87, 0.92];   // bright warm haze
+const FOG_COLOR   = [0.82, 0.87, 0.92];
 const FOG_NEAR    = 500;
 const FOG_FAR     = 950;
 
@@ -439,16 +538,12 @@ const camPos = [plane.pos[0], plane.pos[1] + 5, plane.pos[2] + 16];
 const camUp  = [0, 1, 0];
 
 let throttleSmooth = plane.throttle;
-
-/* RATE-SMOOTHED flight model:
-   inputs set a target angular rate; the plane eases toward it.
-   gives responsive but weighty motion. */
 let ratePitch = 0, rateYaw = 0, rateRoll = 0;
 
 const MAX_PITCH_RATE = 1.65;
 const MAX_ROLL_RATE  = 3.10;
 const MAX_YAW_RATE   = 0.95;
-const RESPONSE       = 6.5;   // how quickly rates approach targets
+const RESPONSE       = 6.5;
 
 let propAngle  = 0;
 let crashTimer = 0;
@@ -555,7 +650,7 @@ function crash() {
 }
 
 /* =========================================================================
-   UPDATE  — improved flight feel
+   UPDATE
    ========================================================================= */
 function update(dt) {
   gameTime += dt;
@@ -566,7 +661,6 @@ function update(dt) {
     return;
   }
 
-  /* ----- inputs ----- */
   let pitchIn = 0, rollIn = 0, yawIn = 0;
   if (keys['KeyW'] || keys['ArrowUp'])    pitchIn += 1;
   if (keys['KeyS'] || keys['ArrowDown'])  pitchIn -= 1;
@@ -590,37 +684,30 @@ function update(dt) {
 
   throttleSmooth += (plane.throttle - throttleSmooth) * Math.min(1, dt * 3.0);
 
-  /* ----- control authority depends on airspeed -----
-     slow = mushy controls, fast = crisp */
   const authority = clamp(plane.speed / 80, 0.40, 1.35);
 
   const targetPitch = pitchIn * MAX_PITCH_RATE * authority;
   const targetRoll  = rollIn  * MAX_ROLL_RATE  * authority;
   const targetYaw   = yawIn   * MAX_YAW_RATE   * authority;
 
-  // ease rates toward the target → responsive but weighty
   const rp = 1 - Math.exp(-RESPONSE * dt);
   ratePitch = lerp(ratePitch, targetPitch, rp);
   rateRoll  = lerp(rateRoll,  targetRoll,  rp);
   rateYaw   = lerp(rateYaw,   targetYaw,   rp);
 
-  /* ----- rotation ----- */
   let rot = qIdentity();
   rot = qMul(rot, qAxisAngle(1, 0, 0, ratePitch * dt));
   rot = qMul(rot, qAxisAngle(0, 0, 1, rateRoll  * dt));
   rot = qMul(rot, qAxisAngle(0, 1, 0, rateYaw   * dt));
   plane.q = qNorm(qMul(plane.q, rot));
 
-  /* natural banking: bank → heading change, feels like flying */
   const rightAxis = qRot(plane.q, [1, 0, 0]);
   const bankTurn = rightAxis[1] * 0.90 * clamp(plane.speed / 70, 0.4, 1.4);
   plane.q = qNorm(qMul(qAxisAngle(0, 1, 0, bankTurn * dt), plane.q));
 
-  /* ----- velocity ----- */
   const fwd = qRot(plane.q, [0, 0, -1]);
   const targetSpeed = 30 + throttleSmooth * 100;
 
-  // smooth acceleration, plus gravity exchange on climb/dive
   plane.speed += (targetSpeed - plane.speed) * Math.min(1, dt * 0.9);
   plane.speed -= fwd[1] * 30 * dt;
   plane.speed = clamp(plane.speed, 20, 175);
@@ -631,7 +718,6 @@ function update(dt) {
 
   propAngle += (2.0 + throttleSmooth * 30.0) * dt;
 
-  /* ----- collision ----- */
   const gh = Terrain.terrainHeight(plane.pos[0], plane.pos[2]);
   if (plane.pos[1] < gh + 2.0) {
     plane.pos[1] = gh + 2.0;
@@ -639,7 +725,6 @@ function update(dt) {
     return;
   }
 
-  /* ----- chase camera with look-ahead ----- */
   const off = qRot(plane.q, [0, 3.0, 12.5]);
   const desiredX = plane.pos[0] + off[0];
   const desiredY = plane.pos[1] + off[1];
@@ -675,7 +760,6 @@ const matTmpA = m4();
 const matTmpB = m4();
 const matTmpC = m4();
 
-/* frustum culling */
 const frustum = new Float32Array(24);
 function updateFrustum(m) {
   const r0 = [m[0], m[4], m[8],  m[12]];
@@ -717,6 +801,21 @@ if (window.visualViewport) {
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 
+/* --- helper: draw a textured model mesh with the standard model program --- */
+function drawTexturedModel(mesh) {
+  if (!mesh) return;
+  if (mesh.texture) {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, mesh.texture);
+    gl.uniform1i(modelU.uTexture, 0);
+    gl.uniform1f(modelU.uHasTexture, 1.0);
+  } else {
+    gl.uniform1f(modelU.uHasTexture, 0.0);
+  }
+  gl.bindVertexArray(mesh.vao);
+  gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
+}
+
 function render() {
   resize();
   gl.viewport(0, 0, screenW, screenH);
@@ -724,7 +823,6 @@ function render() {
   const aspect = screenW / screenH;
   m4perspective(matProj, 62 * Math.PI / 180, aspect, 0.6, 2800);
 
-  /* camera looks ahead of the plane */
   const la = qRot(plane.q, [0, 1.6, -14]);
   const lookTarget = [
     plane.pos[0] + la[0],
@@ -807,10 +905,9 @@ function render() {
   gl.uniform1f(modelU.uFogFar, FOG_FAR);
 
   gl.uniformMatrix4fv(modelU.uModel, false, matPlane);
-  gl.bindVertexArray(Models.planeMesh.vao);
-  gl.drawElements(gl.TRIANGLES, Models.planeMesh.count, gl.UNSIGNED_SHORT, 0);
+  drawTexturedModel(Models.planeMesh);
 
-  /* propeller */
+  /* propeller (spinning around local Z) */
   {
     m4identity(matTmpA); matTmpA[14] = -2.05;
     const ca = Math.cos(propAngle), sa = Math.sin(propAngle);
@@ -820,8 +917,7 @@ function render() {
     m4mul(matTmpC, matTmpA, matTmpB);
     m4mul(matModel, matPlane, matTmpC);
     gl.uniformMatrix4fv(modelU.uModel, false, matModel);
-    gl.bindVertexArray(Models.propMesh.vao);
-    gl.drawElements(gl.TRIANGLES, Models.propMesh.count, gl.UNSIGNED_SHORT, 0);
+    drawTexturedModel(Models.propMesh);
   }
 
   /* -------- AIRCRAFT OUTLINES -------- */
@@ -849,7 +945,7 @@ function render() {
     gl.cullFace(gl.BACK);
   }
 
-  /* -------- WORLD MODELS: TREES -------- */
+  /* -------- WORLD MODELS: TREES (per-variant meshes + textures) -------- */
   gl.useProgram(modelProg);
   gl.uniformMatrix4fv(modelU.uViewProj, false, matViewProj);
   gl.uniform3fv(modelU.uCamPos, camPos);
@@ -862,10 +958,11 @@ function render() {
   for (const ch of visible) {
     for (const obj of ch.objects) {
       if (obj.type !== 'tree') continue;
+      /* Resolve the correct variant mesh (oak, pine, palm, cactus, ...) */
+      const mesh = obj.mesh || Models.getTreeMesh(obj);
       m4fromTRS(matModel, obj.position, obj.rotation, obj.scale);
       gl.uniformMatrix4fv(modelU.uModel, false, matModel);
-      gl.bindVertexArray(Models.treeMesh.vao);
-      gl.drawElements(gl.TRIANGLES, Models.treeMesh.count, gl.UNSIGNED_SHORT, 0);
+      drawTexturedModel(mesh);
     }
   }
 
@@ -880,10 +977,11 @@ function render() {
     for (const ch of visible) {
       for (const obj of ch.objects) {
         if (obj.type !== 'tree') continue;
+        const mesh = obj.mesh || Models.getTreeMesh(obj);
         m4fromTRS(matModel, obj.position, obj.rotation, obj.scale);
         gl.uniformMatrix4fv(outU.uModel, false, matModel);
-        gl.bindVertexArray(Models.treeMesh.vao);
-        gl.drawElements(gl.TRIANGLES, Models.treeMesh.count, gl.UNSIGNED_SHORT, 0);
+        gl.bindVertexArray(mesh.vao);
+        gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
       }
     }
     gl.cullFace(gl.BACK);
@@ -952,7 +1050,7 @@ function frame(now) {
   dt = Math.min(dt, 0.05);
 
   update(dt);
-  Terrain.updateChunks(plane.pos[0], plane.pos[2]); // ALWAYS generating
+  Terrain.updateChunks(plane.pos[0], plane.pos[2]);
   render();
   updateHud(dt);
 }
