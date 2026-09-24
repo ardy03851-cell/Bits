@@ -264,9 +264,11 @@ const UI = (function buildUI() {
   };
 })();
 
-;
-
-PlaneModels.initPreview(UI.shopPreview);
+try {
+  PlaneModels.initPreview(UI.shopPreview);
+} catch (e) {
+  console.warn('[SkyCube] shop preview unavailable:', e);
+}
 
 /* =========================================================================
    HANGAR / SHOP UI
@@ -291,11 +293,15 @@ function colorWheelPosition(hex) {
 }
 
 function updateColorWheelKnob() {
-  const { h, s } = colorWheelPosition(shopState.selectedColor);
-  const radius = Math.min(UI.colorWheel.clientWidth, UI.colorWheel.clientHeight) * 0.5;
+  const wheel = UI.colorWheel;
+  if (!wheel) return;
+  const w = wheel.clientWidth || 118;
+  const h = wheel.clientHeight || 118;
+  const radius = Math.min(w, h) * 0.5;
   const center = radius;
+  const { h: hue, s } = colorWheelPosition(shopState.selectedColor);
   const r = radius * s * 0.90;
-  const a = (h - 90) * Math.PI / 180;
+  const a = (hue - 90) * Math.PI / 180;
   const cx = center + Math.cos(a) * r;
   const cy = center + Math.sin(a) * r;
   UI.colorKnob.style.left = cx + 'px';
@@ -398,6 +404,11 @@ function setShopTab(tab) {
   activeShopTab = tab;
   UI.shopTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
   UI.shopViews.forEach(view => view.classList.toggle('active', view.dataset.view === tab));
+  /* The paint view is display:none by default, so its clientWidth is 0 until
+     it becomes visible. Recompute the knob position on the next frame. */
+  if (tab === 'paint') {
+    requestAnimationFrame(updateColorWheelKnob);
+  }
   if (tab === 'stickers' || tab === 'owned') loadStickers();
 }
 UI.shopTabs.forEach(btn => btn.addEventListener('click', e => {
@@ -456,7 +467,6 @@ async function loadStickers() {
   if (stickerScanPromise) return stickerScanPromise;
   stickerScanPromise = discoverStickers().then(list => {
     stickerCatalog = list;
-    // Preserve ownership even if a host temporarily hides the directory listing.
     renderStickerGrid();
     renderOwnedCollection();
     return list;
@@ -541,6 +551,10 @@ function openShop() {
   UI.shop.setAttribute('aria-hidden', 'false');
   canvas.classList.add('shop-blurred');
   updateShopUI();
+  /* The paint view is hidden until the user clicks its tab, so the wheel
+     has no measurable size yet. Recompute on the next animation frame in
+     case the shop opens while PAINT is the active tab. */
+  requestAnimationFrame(updateColorWheelKnob);
 }
 
 function closeShop() {
@@ -565,18 +579,21 @@ UI.flyAgainBtn.addEventListener('click', e => {
   flyAgainBusy = true;
   UI.flyAgainBtn.disabled = true;
   UI.flyAgainBtn.classList.add('pressed');
-  window.setTimeout(() => {
-    try {
-      crashTimer = 0;
-      closeShop();
-      respawn();
-      showMessage('READY TO FLY', 700);
-    } finally {
-      flyAgainBusy = false;
-      UI.flyAgainBtn.disabled = false;
-      UI.flyAgainBtn.classList.remove('pressed');
-    }
-  }, 120);
+  /* Run the reset immediately. Deferring with setTimeout made the button
+     feel dead and, worse, allowed the crashed flight state to linger a
+     frame or two longer than it should. */
+  try {
+    crashTimer = 0;
+    closeShop();
+    respawn();
+    showMessage('READY TO FLY', 700);
+  } catch (err) {
+    console.error('[SkyCube] fly-again failed:', err);
+  } finally {
+    flyAgainBusy = false;
+    UI.flyAgainBtn.disabled = false;
+    UI.flyAgainBtn.classList.remove('pressed');
+  }
 });
 
 updateShopUI();
@@ -1293,6 +1310,8 @@ function pickStick(clientX) {
 }
 function onTouchStart(e) {
   if (e.target && e.target.tagName === 'BUTTON') return;
+  /* When the shop is open, the shop handles its own input. */
+  if (shopOpen) return;
   for (const t of e.changedTouches) {
     const s = pickStick(t.clientX);
     if (s) s.start(t);
@@ -1300,6 +1319,7 @@ function onTouchStart(e) {
   e.preventDefault();
 }
 function onTouchMove(e) {
+  if (shopOpen) return;
   for (const t of e.changedTouches) {
     if (leftStick.id  === t.identifier) { leftStick.update(t);  continue; }
     if (rightStick.id === t.identifier) { rightStick.update(t); continue; }
@@ -1773,7 +1793,13 @@ function frame(now) {
   update(dt);
   Terrain.updateChunks(plane.pos[0], plane.pos[2]);
   render();
-  if (shopOpen) PlaneModels.renderPreview(now, planeModelId, shopState.selectedColor);
+  if (shopOpen) {
+    try {
+      PlaneModels.renderPreview(now, planeModelId, shopState.selectedColor);
+    } catch (e) {
+      /* Preview failures must not break the main loop. */
+    }
+  }
   UI.moneyHud.textContent = 'CASH $' + Math.floor(shopState.money);
   updateHud(dt);
 }
