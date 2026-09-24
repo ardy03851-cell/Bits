@@ -27,8 +27,20 @@
      attribute 0 : vec3 position
      attribute 1 : vec3 normal
      attribute 2 : vec3 colour     (multiply with texture)
-     attribute 3 : vec2 uv         <-- NEW, needed for textures
-     uniform sampler2D uTexture    <-- bind mesh.texture here (unit 0)
+     attribute 3 : vec2 uv         (needed for textures)
+     uniform sampler2D uTexture    (bind mesh.texture here, unit 0)
+   ------------------------------------------------------------------
+
+   CHANGES IN THIS VERSION
+   ------------------------------------------------------------------
+   • Biome noise frequencies raised ~4x so biomes are encountered locally
+     instead of once per ~7,000 units.
+   • Three new biomes added: savanna, badlands, highlands.
+   • Terrain now stacks three overlapping mountain scales (large ranges,
+     medium connector ridges, small foothills) with a much taller peak
+     contribution, so massive mountains actually appear in view.
+   • Tree tables extended for the new biomes.
+   • Oasis palm trigger window widened so palms ring the water tongues.
    ------------------------------------------------------------------
 */
 (function (global) {
@@ -92,27 +104,49 @@ function ridgedFbm(x, y, oct) {
    ========================================================================= */
 const SEA_LEVEL = 0;
 
+/* Wavelengths tuned so biomes are visible during a single flight:
+     tempNoise  : wavelength ≈ 2,200 units
+     moistNoise : wavelength ≈ 1,400 units
+   (previous values were ~7,700 / ~4,760, i.e. effectively invisible) */
 function tempNoise(x, z) {
-  return fbm(x * 0.00013 + 512.3, z * 0.00013 + 941.7, 3);
+  return fbm(x * 0.00045 + 512.3, z * 0.00045 + 941.7, 3);
 }
 function moistNoise(x, z) {
-  return fbm(x * 0.00021 + 187.4, z * 0.00021 + 623.1, 3);
+  return fbm(x * 0.00072 + 187.4, z * 0.00072 + 623.1, 3);
 }
 
 function getBiome(x, z, y) {
   const t = tempNoise(x, z);
   const m = moistNoise(x, z);
 
+  /* altitude layers first */
   if (y < SEA_LEVEL - 1.5) return 'ocean';
-  if (y < SEA_LEVEL + 2.0) return 'beach';
-  if (y > 95) return 'snow';
-  if (t < -0.42 && y > 40) return 'snow';
-  if (t < -0.30) return 'tundra';
-  if (t > 0.15 && m < -0.08) return 'desert';
-  if (t > 0.10 && m > 0.28) return 'jungle';
+  if (y < SEA_LEVEL + 2.5) return 'beach';
+  if (y > 92) return 'snow';
+  if (y > 62) return (t < 0.10) ? 'snow' : 'highlands';
+
+  /* latitude (temperature) */
+  if (t < -0.42) return 'snow';
+  if (t < -0.28) return 'tundra';
+
+  /* hot / dry quadrant */
+  if (t > 0.15 && m < -0.12) {
+    return (y > 32) ? 'badlands' : 'desert';
+  }
+  /* hot / semi-dry */
+  if (t > 0.18 && m < 0.10) return 'savanna';
+
+  /* hot / wet */
+  if (t > 0.10 && m > 0.30) return 'jungle';
+
+  /* wet & low */
   if (m > 0.42 && y < 12) return 'swamp';
-  if (y > 62) return 'mountain';
-  if (m > 0.00) return 'forest';
+
+  /* upland */
+  if (y > 48) return 'mountain';
+
+  /* temperate default */
+  if (m > 0.05) return 'forest';
   return 'plains';
 }
 
@@ -120,24 +154,50 @@ function getBiome(x, z, y) {
    TERRAIN HEIGHT
    ========================================================================= */
 function terrainHeight(x, z) {
-  /* Continental base */
-  const continent = fbm(x * 0.00018, z * 0.00018, 4);
-  let h = continent * 55;
+  /* Continental base — broad shaping */
+  const continent = fbm(x * 0.00016, z * 0.00016, 4);
+  let h = continent * 50;
 
   /* Rolling hills */
-  h += fbm(x * 0.0032, z * 0.0032, 3) * 14;
+  h += fbm(x * 0.0034, z * 0.0034, 3) * 12;
 
-  /* Mountain ranges: masked ridged noise -> long, connecting ranges */
-  const mMask = smoothstep(0.05, 0.55, fbm(x * 0.00035 + 71.2, z * 0.00035 + 33.8, 3));
-  if (mMask > 0.001) {
-    const ridge = ridgedFbm(x * 0.00085 + 12.3, z * 0.00085 + 45.7, 4);
-    h += Math.pow(ridge, 1.7) * mMask * 180;
+  /* ---------------------------------------------------------------
+     MOUNTAINS — three overlapping scales.
+     mask  : where mountains are allowed to form
+     ridge : the actual sharp, elongated mountain shape
+     Higher frequency + more permissive mask = ranges you can
+     actually find and fly through.
+     --------------------------------------------------------------- */
+
+  /* LARGE ranges — towering peaks up to ~230 m */
+  const maskLarge = smoothstep(-0.05, 0.40,
+      fbm(x * 0.00060 + 71.2, z * 0.00060 + 33.8, 3));
+  if (maskLarge > 0.001) {
+    const ridgeLarge = ridgedFbm(x * 0.0011 + 12.3, z * 0.0011 + 45.7, 5);
+    h += Math.pow(ridgeLarge, 1.35) * maskLarge * 230;
   }
 
-  /* Cliff bands: terraced regions with hard vertical walls */
-  const cliffMask = smoothstep(0.5, 0.7, fbm(x * 0.0008 + 555, z * 0.0008 + 555, 2));
+  /* MEDIUM ridges — connector peaks between ranges, ~95 m */
+  const maskMed = smoothstep(0.00, 0.45,
+      fbm(x * 0.0014 + 88.1, z * 0.0014 + 22.9, 3));
+  if (maskMed > 0.001) {
+    const ridgeMed = ridgedFbm(x * 0.0025 + 33.7, z * 0.0025 + 91.1, 4);
+    h += Math.pow(ridgeMed, 1.5) * maskMed * 95;
+  }
+
+  /* SMALL foothills — short bumps, ~30 m */
+  const maskSmall = smoothstep(0.10, 0.55,
+      fbm(x * 0.0032 + 99.1, z * 0.0032 + 77.4, 2));
+  if (maskSmall > 0.001) {
+    const ridgeSmall = ridgedFbm(x * 0.0052 + 55.5, z * 0.0052 + 11.7, 3);
+    h += Math.pow(ridgeSmall, 1.6) * maskSmall * 30;
+  }
+
+  /* Cliff bands — terraced walls (unchanged idea, tighter mask) */
+  const cliffMask = smoothstep(0.55, 0.72,
+      fbm(x * 0.0008 + 555, z * 0.0008 + 555, 2));
   if (cliffMask > 0.001) {
-    const stepH = 9;
+    const stepH = 11;
     const t = h / stepH;
     const f = t - Math.floor(t);
     const sharp = Math.pow(f, 3.5);
@@ -145,7 +205,7 @@ function terrainHeight(x, z) {
     h = h * (1 - cliffMask) + hTerr * cliffMask;
   }
 
-  h -= 12;
+  h -= 8;
 
   /* Desert oases: rare, winding water tongues in low-lying hot/dry areas */
   if (h < 25) {
@@ -542,17 +602,20 @@ const TREE_DEFS = {
    Each entry: [variant, cumulativeWeight]
    ========================================================================= */
 const BIOME_TREES = {
-  forest:  [['oak',0.22],['pine',0.42],['birch',0.58],['maple',0.72],
-            ['spruce',0.82],['willow',0.89],['redwood',0.95],['bush',1.00]],
-  plains:  [['oak',0.35],['bush',0.62],['birch',0.82],['maple',1.00]],
-  jungle:  [['palm',0.35],['willow',0.58],['bush',0.80],['redwood',1.00]],
-  desert:  [['cactus',0.55],['dead',1.00]],
-  tundra:  [['spruce',0.40],['pine',0.70],['dead',1.00]],
-  snow:    [['spruce',0.65],['dead',1.00]],
-  mountain:[['pine',0.50],['spruce',0.82],['dead',1.00]],
-  swamp:   [['willow',0.55],['dead',1.00]],
-  beach:   [['palm',0.75],['bush',1.00]],
-  ocean:   []
+  forest:   [['oak',0.22],['pine',0.42],['birch',0.58],['maple',0.72],
+             ['spruce',0.82],['willow',0.89],['redwood',0.95],['bush',1.00]],
+  plains:   [['oak',0.35],['bush',0.62],['birch',0.82],['maple',1.00]],
+  jungle:   [['palm',0.35],['willow',0.58],['bush',0.80],['redwood',1.00]],
+  desert:   [['cactus',0.55],['dead',1.00]],
+  savanna:  [['oak',0.35],['bush',0.60],['dead',0.85],['palm',1.00]],
+  badlands: [['dead',0.50],['cactus',0.80],['bush',1.00]],
+  tundra:   [['spruce',0.40],['pine',0.70],['dead',1.00]],
+  snow:     [['spruce',0.65],['dead',1.00]],
+  mountain: [['pine',0.50],['spruce',0.82],['dead',1.00]],
+  highlands:[['pine',0.40],['spruce',0.70],['dead',0.90],['bush',1.00]],
+  swamp:    [['willow',0.55],['dead',1.00]],
+  beach:    [['palm',0.75],['bush',1.00]],
+  ocean:    []
 };
 
 function pickFromTable(table, r) {
@@ -563,11 +626,12 @@ function pickFromTable(table, r) {
 }
 
 function pickTreeForBiome(biome, y, r) {
-  /* Desert / oasis special case: near water, force palms */
-  if (biome === 'desert') {
-    if (y > SEA_LEVEL - 0.5 && y < 6.0) return 'palm';
+  /* Desert / oasis special case: near water, force palms.
+     Widened trigger window (y < 8.0) so palms ring the water tongues. */
+  if (biome === 'desert' || biome === 'badlands') {
+    if (y > SEA_LEVEL - 0.5 && y < 8.0) return 'palm';
     if (y < SEA_LEVEL - 0.5) return null;      // underwater -> skip
-    return pickFromTable(BIOME_TREES.desert, r);
+    return pickFromTable(BIOME_TREES[biome], r);
   }
   const table = BIOME_TREES[biome];
   if (!table || !table.length) return null;
