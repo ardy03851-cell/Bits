@@ -3,16 +3,8 @@
    SkyCube — main game logic
    Terrain generation lives in models.js (Terrain.*)
 
-   CHANGES IN THIS VERSION
-   -------------------------------------------------------------------------
-   • Terrain shader now evaluates the SAME temperature / moisture fields as
-     models.js, so each biome renders with its own palette:
-        ocean · beach · desert · savanna · jungle · swamp · plains ·
-        forest · tundra · snow · badlands · highlands · mountain
-   • Snow line and rock line moved up to match the taller mountains.
-   • HUD shows the current biome by name (Terrain.getBiome).
-   • Water, lighting, texture pipeline and models kept from the previous
-     pass — only terrain colouring and the HUD changed.
+   This file builds ALL of the DOM UI at runtime and applies UI textures
+   from ./ui/ when they are available. Every texture is optional.
    ========================================================================= */
 
 const canvas = document.getElementById('glcanvas');
@@ -25,32 +17,152 @@ if (!gl) {
     '<div style="color:#fff;padding:40px;font-family:sans-serif">WebGL2 is required.</div>';
   throw new Error('no webgl2');
 }
-const hudStats = document.getElementById('stats');
-const msgEl = document.getElementById('msg');
-const resetBtn = document.getElementById('resetBtn');
-const touchUI = document.getElementById('touchUI');
-
-const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
-if (IS_TOUCH) {
-  touchUI.style.display = 'block';
-  resetBtn.style.display = 'block';
-  document.getElementById('hudKeys').style.display = 'none';
-  document.getElementById('hudKeys2').style.display = 'none';
-}
-
-/* ---- init terrain system with our gl context ---- */
-Terrain.init(gl);
 
 /* =========================================================================
-   MATH
+   MATH (needed early by UI helpers)
    ========================================================================= */
 const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
 const lerp  = (a, b, t) => a + (b - a) * t;
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
 
+/* =========================================================================
+   INIT SYSTEMS
+   ========================================================================= */
+Terrain.init(gl);
+Models.init(gl);
+
+/* =========================================================================
+   BUILD UI  (all DOM is created here — index.html stays a blank shell)
+   ========================================================================= */
+const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+if (IS_TOUCH) document.body.classList.add('is-touch');
+
+const UI = (function buildUI() {
+  const root = document.createElement('div');
+  root.id = 'ui-root';
+  root.innerHTML = [
+    '<div id="crosshair"></div>',
+
+    '<div id="hud" class="hud-panel">',
+      '<div id="hudKeys"><b>W/S</b> pitch &nbsp; <b>A/D</b> roll &nbsp; <b>Q/E</b> rudder</div>',
+      '<div id="hudKeys2"><b>SHIFT/CTRL</b> throttle &nbsp; <b>R</b> respawn &nbsp; <b>O</b> outlines</div>',
+    '</div>',
+
+    '<div id="stats" class="hud-panel"></div>',
+    '<div id="msg"></div>',
+
+    '<div id="touchUI">',
+      '<div class="stick" id="leftStick">',
+        '<div class="stick-base"></div>',
+        '<div class="knob" id="leftKnob"></div>',
+        '<div class="stickLabel">PITCH / ROLL</div>',
+      '</div>',
+      '<div class="stick" id="rightStick">',
+        '<div class="stick-base"></div>',
+        '<div class="knob" id="rightKnob"></div>',
+        '<div class="stickLabel">YAW</div>',
+      '</div>',
+      '<div id="throttle">',
+        '<div class="throttle-frame"></div>',
+        '<div class="throttle-track">',
+          '<div class="throttle-fill"></div>',
+        '</div>',
+        '<div class="throttle-handle"></div>',
+        '<div class="throttle-label">THROTTLE</div>',
+      '</div>',
+    '</div>',
+
+    '<button id="resetBtn">RESPAWN</button>'
+  ].join('');
+
+  document.body.appendChild(root);
+
+  return {
+    root,
+    crosshair: document.getElementById('crosshair'),
+    hud:       document.getElementById('hud'),
+    stats:     document.getElementById('stats'),
+    msg:       document.getElementById('msg'),
+    touchUI:   document.getElementById('touchUI'),
+    leftStick: document.getElementById('leftStick'),
+    leftKnob:  document.getElementById('leftKnob'),
+    rightStick:document.getElementById('rightStick'),
+    rightKnob: document.getElementById('rightKnob'),
+    throttle:  document.getElementById('throttle'),
+    throttleFill:   root.querySelector('.throttle-fill'),
+    throttleHandle: root.querySelector('.throttle-handle'),
+    throttleTrack:  root.querySelector('.throttle-track'),
+    throttleLabel:  root.querySelector('.throttle-label'),
+    resetBtn:  document.getElementById('resetBtn')
+  };
+})();
+
+/* =========================================================================
+   UI TEXTURE WIRING
+   Maps each UI texture name to a CSS variable. When a texture loads, the
+   variable is set to url("..."). Missing files simply leave it as `none`
+   so the CSS fallback continues to render.
+   ========================================================================= */
+(function wireUITextures() {
+  const VAR_MAP = {
+    ui_stick_base:              '--ui-stick-base',
+    ui_stick_base_active:       '--ui-stick-base-active',
+    ui_stick_knob:              '--ui-stick-knob',
+    ui_stick_knob_active:       '--ui-stick-knob-active',
+    ui_throttle_track:          '--ui-throttle-track',
+    ui_throttle_fill:           '--ui-throttle-fill',
+    ui_throttle_handle:         '--ui-throttle-handle',
+    ui_throttle_handle_active:  '--ui-throttle-handle-active',
+    ui_throttle_frame:          '--ui-throttle-frame',
+    ui_throttle_label:          '--ui-throttle-label',
+    ui_crosshair:               '--ui-crosshair',
+    ui_hud_panel:               '--ui-hud-panel',
+    ui_hud_corner:              '--ui-hud-corner',
+    ui_btn_frame:               '--ui-btn-frame',
+    ui_btn_frame_active:        '--ui-btn-frame-active'
+  };
+
+  /* Which elements should get a `.textured` class when their texture loads. */
+  const ELEMENT_MAP = {
+    ui_crosshair:      UI.crosshair,
+    ui_hud_panel:      [UI.hud, UI.stats],
+    ui_btn_frame:      UI.resetBtn,
+    ui_throttle_label: UI.throttleLabel
+  };
+
+  Models.onAssetsLoaded((entry) => {
+    if (!entry || !entry.name) return;
+    const cssVar = VAR_MAP[entry.name];
+    if (!cssVar) return;
+
+    if (entry.loaded) {
+      document.documentElement.style.setProperty(
+        cssVar, 'url("' + entry.path + '")'
+      );
+      const el = ELEMENT_MAP[entry.name];
+      if (el) {
+        if (Array.isArray(el)) for (const e of el) e.classList.add('textured');
+        else el.classList.add('textured');
+      }
+      console.log('[SkyCube] ui texture loaded:', entry.path);
+    } else if (entry.failed) {
+      console.log('[SkyCube] ui texture missing (using fallback):', entry.path);
+    }
+  });
+})();
+
+/* =========================================================================
+   MESSAGE / HUD REFERENCES (already captured in UI)
+   ========================================================================= */
+const hudStats = UI.stats;
+const msgEl    = UI.msg;
+const resetBtn = UI.resetBtn;
+
+/* =========================================================================
+   MATH — 4x4 matrices, quaternions
+   ========================================================================= */
 function m4() { return new Float32Array(16); }
 function m4identity(o) { o.fill(0); o[0] = o[5] = o[10] = o[15] = 1; return o; }
-
 function m4perspective(o, fovy, aspect, near, far) {
   const f = 1 / Math.tan(fovy / 2);
   o.fill(0);
@@ -112,7 +224,6 @@ function m4invert(o, m) {
   return o;
 }
 
-/* --- quaternion --- */
 function qIdentity() { return [0,0,0,1]; }
 function qMul(a, b) {
   return [
@@ -154,7 +265,6 @@ function m4fromQuatPos(o, q, p) {
   o[12]=p[0];     o[13]=p[1];     o[14]=p[2];     o[15]=1;
   return o;
 }
-
 function m4fromTRS(o, p, rotY, scale) {
   const c = Math.cos(rotY), s = Math.sin(rotY);
   o[0] = c * scale;  o[1] = 0;          o[2] = -s * scale; o[3] = 0;
@@ -212,24 +322,17 @@ void main(){
   float t = pow(clamp(up, 0.0, 1.0), 0.55);
   vec3 col = mix(uSkyHorizon, uSkyTop, t);
   col = mix(col, uGroundColor, smoothstep(0.0, -0.22, up));
-
   float sd = max(dot(d, uSunDir), 0.0);
   col += uSunColor * pow(sd, 1200.0) * 18.0;
   col += uSunColor * pow(sd, 40.0)   * 0.55;
   col += uSunColor * pow(sd, 6.0)    * 0.14;
   col += uSunColor * pow(sd, 2.0)    * 0.05;
-
   fragColor = vec4(col, 1.0);
 }`);
-const skyU = locs(skyProg, ['uInvViewProj','uCamPos','uSunDir','uSunColor','uSkyTop','uSkyHorizon','uGroundColor']);
+const skyU = locs(skyProg,
+  ['uInvViewProj','uCamPos','uSunDir','uSunColor','uSkyTop','uSkyHorizon','uGroundColor']);
 
-/* --------------------------------------------------------------------------
-   TERRAIN
-   The fragment shader now reconstructs the biome fields (temperature and
-   moisture) using the same frequencies as models.js, then blends a
-   per-biome palette.  Altitude and slope override the lowland biome so
-   mountains, snow and badlands read correctly.
-   ------------------------------------------------------------------------ */
+/* ---- terrain ---- */
 const terrainProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -245,7 +348,6 @@ uniform vec3 uCamPos, uSunDir, uSunColor, uFogColor;
 uniform float uFogNear, uFogFar;
 out vec4 fragColor;
 
-/* ------- value noise + fbm, matching models.js closely enough -------- */
 float hash1(vec2 p){
   return fract(sin(dot(floor(p), vec2(12.9898, 78.233))) * 43758.5453);
 }
@@ -258,31 +360,29 @@ float vnoise(vec2 p){
   float d = hash1(i + vec2(1.0, 1.0));
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-/* Signed fbm, output roughly -1..1 (same as CPU version) */
 float fbm2(vec2 p){
   float sum = 0.0, amp = 1.0, n = 0.0, f = 1.0;
   for (int i = 0; i < 3; i++){
     sum += (vnoise(p * f) * 2.0 - 1.0) * amp;
-    n   += amp;
+    n += amp;
     amp *= 0.5;
-    f   *= 2.03;
+    f *= 2.03;
   }
   return sum / n;
 }
 
-/* ------- biome palettes -------------------------------------------- */
-const vec3 C_BEACH     = vec3(0.88, 0.82, 0.62);
-const vec3 C_PLAINS    = vec3(0.44, 0.56, 0.26);
-const vec3 C_FOREST    = vec3(0.22, 0.42, 0.16);
-const vec3 C_JUNGLE    = vec3(0.12, 0.36, 0.14);
-const vec3 C_SWAMP     = vec3(0.28, 0.34, 0.18);
-const vec3 C_DESERT    = vec3(0.86, 0.74, 0.44);
-const vec3 C_SAVANNA   = vec3(0.70, 0.64, 0.30);
-const vec3 C_BADLANDS  = vec3(0.66, 0.36, 0.24);
-const vec3 C_TUNDRA    = vec3(0.58, 0.60, 0.52);
-const vec3 C_SNOW      = vec3(0.95, 0.97, 1.00);
-const vec3 C_MOUNTAIN  = vec3(0.44, 0.42, 0.40);
-const vec3 C_HIGHLAND  = vec3(0.46, 0.44, 0.36);
+const vec3 C_BEACH    = vec3(0.88, 0.82, 0.62);
+const vec3 C_PLAINS   = vec3(0.44, 0.56, 0.26);
+const vec3 C_FOREST   = vec3(0.22, 0.42, 0.16);
+const vec3 C_JUNGLE   = vec3(0.12, 0.36, 0.14);
+const vec3 C_SWAMP    = vec3(0.28, 0.34, 0.18);
+const vec3 C_DESERT   = vec3(0.86, 0.74, 0.44);
+const vec3 C_SAVANNA  = vec3(0.70, 0.64, 0.30);
+const vec3 C_BADLANDS = vec3(0.66, 0.36, 0.24);
+const vec3 C_TUNDRA   = vec3(0.58, 0.60, 0.52);
+const vec3 C_SNOW     = vec3(0.95, 0.97, 1.00);
+const vec3 C_MOUNTAIN = vec3(0.44, 0.42, 0.40);
+const vec3 C_HIGHLAND = vec3(0.46, 0.44, 0.36);
 
 void main(){
   vec3 n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
@@ -294,81 +394,56 @@ void main(){
   float slope = 1.0 - clamp(n.y, 0.0, 1.0);
   float h = vWorld.y;
 
-  /* ---- biome fields (same frequencies as models.js) ---- */
   vec2 xz = vWorld.xz;
   float t = fbm2(xz * 0.00045 + vec2(512.3, 941.7));
   float m = fbm2(xz * 0.00072 + vec2(187.4, 623.1));
-
-  /* small per-fragment jitter so the ground isn't a flat colour */
   float v = hash1(xz * 0.35);
 
-  /* ---- lowland biome pick ------------------------------------ */
   vec3 base;
-  if (t > 0.15 && m < -0.12) {
-    base = C_DESERT;
-  } else if (t > 0.18 && m < 0.10) {
-    base = C_SAVANNA;
-  } else if (t > 0.10 && m > 0.30) {
-    base = C_JUNGLE;
-  } else if (m > 0.42 && h < 12.0) {
-    base = C_SWAMP;
-  } else if (m > 0.05) {
-    base = C_FOREST;
-  } else {
-    base = C_PLAINS;
-  }
+  if (t > 0.15 && m < -0.12) base = C_DESERT;
+  else if (t > 0.18 && m < 0.10) base = C_SAVANNA;
+  else if (t > 0.10 && m > 0.30) base = C_JUNGLE;
+  else if (m > 0.42 && h < 12.0) base = C_SWAMP;
+  else if (m > 0.05) base = C_FOREST;
+  else base = C_PLAINS;
+
   if (t < -0.42) base = C_SNOW;
   else if (t < -0.28) base = C_TUNDRA;
 
-  /* Slight colour variation between neighbouring pixels */
   base *= (0.92 + v * 0.16);
 
-  /* ---- altitude overrides ------------------------------------- */
-  if (h > 32.0 && t > 0.15 && m < -0.12) {
+  if (h > 32.0 && t > 0.15 && m < -0.12)
     base = mix(base, C_BADLANDS, smoothstep(32.0, 46.0, h));
-  }
   base = mix(base, C_MOUNTAIN, smoothstep(48.0, 62.0, h));
   base = mix(base, C_HIGHLAND, smoothstep(62.0, 78.0, h));
   base = mix(base, C_SNOW,     smoothstep(82.0, 100.0, h));
-  /* Cold high ground also gets snow */
   base = mix(base, C_SNOW, smoothstep(60.0, 80.0, h) * smoothstep(-0.05, -0.30, t));
 
-  /* ---- beach fade near sea level ----------------------------- */
   base = mix(C_BEACH, base, smoothstep(0.5, 3.0, h));
-
-  /* ---- rock on steep faces ----------------------------------- */
   base = mix(base, C_MOUNTAIN, smoothstep(0.55, 0.80, slope) * 0.85);
-  /* Snow dusting doesn't stick to vertical cliffs */
   base = mix(base, C_SNOW,
     smoothstep(82.0, 100.0, h) * (1.0 - smoothstep(0.55, 0.80, slope)) * 0.55);
 
-  /* ---- shading ------------------------------------------------ */
   float ndl = max(dot(n, uSunDir), 0.0);
-
-  /* Sky/ground hemisphere ambient */
   vec3 skyAmb = vec3(0.42, 0.46, 0.55);
   vec3 gndAmb = vec3(0.22, 0.20, 0.18);
   vec3 ambient = mix(gndAmb, skyAmb, n.y * 0.5 + 0.5);
 
   vec3 col = base * (ambient + uSunColor * ndl * 1.12);
 
-  /* Soft sky rim */
   float rim = pow(1.0 - max(dot(n, viewDir), 0.0), 4.0) * 0.14;
   col += uSunColor * rim;
 
-  /* Warm glow toward the sun */
   float sunAmount = pow(max(dot(viewDir, uSunDir), 0.0), 5.0);
   col += uSunColor * sunAmount * 0.12;
 
-  /* Fog */
-  float fog = smoothstep(uFogNear, uFogFar, dist);
-  col = mix(col, uFogColor, fog);
-
+  col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, dist));
   fragColor = vec4(col, 1.0);
 }`);
-const terrU = locs(terrainProg, ['uViewProj','uCamPos','uSunDir','uSunColor','uFogColor','uFogNear','uFogFar']);
+const terrU = locs(terrainProg,
+  ['uViewProj','uCamPos','uSunDir','uSunColor','uFogColor','uFogNear','uFogFar']);
 
-/* ---- models (plane, propeller, trees) — textured ---- */
+/* ---- models ---- */
 const modelProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -411,7 +486,6 @@ void main(){
   vec3 albedo = mix(vCol, texCol, uHasTexture);
 
   float ndl = max(dot(n, uSunDir), 0.0);
-
   vec3 skyAmb = vec3(0.34, 0.40, 0.50);
   vec3 gndAmb = vec3(0.20, 0.18, 0.16);
   vec3 amb = mix(gndAmb, skyAmb, n.y * 0.5 + 0.5);
@@ -456,9 +530,7 @@ out vec4 fragColor;
 void main(){ fragColor = vec4(0.045, 0.050, 0.065, 1.0); }`);
 const outU = locs(outlineProg, ['uViewProj','uModel','uThickness','uResolution']);
 
-/* ---- water ----
-   Layered directional sines + value noise, no repeating grid.
-------------------------------------------------------------------- */
+/* ---- water ---- */
 const waterProg = makeProgram(`#version 300 es
 precision highp float;
 layout(location=0) in vec3 aPos;
@@ -490,7 +562,6 @@ float vnoise(vec2 p){
   float d = hash21(i + vec2(1.0, 1.0));
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
-
 float waveHeight(vec2 p, float t){
   float h = 0.0;
   h += sin(dot(p, vec2( 0.0413,  0.0271)) + t * 0.91) * 0.36;
@@ -503,12 +574,10 @@ float waveHeight(vec2 p, float t){
   h += (vnoise(p * 1.13 + t * 0.19) - 0.5) * 0.12;
   return h;
 }
-
 void main(){
   vec3 toCam = uCamPos - vWorld;
   float dist = length(toCam);
   vec3 viewDir = toCam / max(dist, 1e-4);
-
   vec2 p = vWorld.xz;
   float e = 0.55;
   float hC = waveHeight(p, uTime);
@@ -516,20 +585,15 @@ void main(){
   float hR = waveHeight(p + vec2(e, 0.0), uTime);
   float hD = waveHeight(p - vec2(0.0, e), uTime);
   float hU = waveHeight(p + vec2(0.0, e), uTime);
-
   float amp = 0.85;
   vec3 n = normalize(vec3((hL - hR) * amp, 2.0 * e, (hD - hU) * amp));
-
   float crest = clamp(hC * 0.5 + 0.5, 0.0, 1.0);
-
   float fres = pow(1.0 - max(dot(viewDir, n), 0.0), 3.0);
   vec3 deep = mix(vec3(0.045, 0.130, 0.210), vec3(0.075, 0.205, 0.260), crest);
   vec3 col = mix(deep, uSkyHorizon, clamp(fres, 0.0, 1.0) * 0.85);
-
   vec3 hv = normalize(uSunDir + viewDir);
   col += uSunColor * pow(max(dot(n, hv), 0.0), 380.0) * 2.2;
   col += uSunColor * pow(max(dot(n, hv), 0.0), 22.0)  * 0.13;
-
   col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, dist));
   fragColor = vec4(col, 1.0);
 }`);
@@ -537,19 +601,6 @@ const waterU = locs(waterProg, [
   'uViewProj','uModel','uCamPos','uSunDir','uSunColor','uFogColor',
   'uSkyHorizon','uFogNear','uFogFar','uTime'
 ]);
-
-/* =========================================================================
-   WORLD MODELS
-   ========================================================================= */
-Models.init(gl);
-
-/* Optional: log which textures arrived, helpful when debugging. */
-if (Models.onAssetsLoaded) {
-  Models.onAssetsLoaded((entry) => {
-    if (entry.loaded) console.log('[SkyCube] texture loaded:', entry.path);
-    else if (entry.failed) console.warn('[SkyCube] texture missing:', entry.path);
-  });
-}
 
 /* =========================================================================
    WATER + SKY GEOMETRY
@@ -584,8 +635,6 @@ const SKY_TOP     = [0.24, 0.47, 0.80];
 const SKY_HORIZON = [0.86, 0.89, 0.93];
 const SKY_GROUND  = [0.56, 0.62, 0.66];
 const FOG_COLOR   = [0.82, 0.87, 0.92];
-/* Fog pushed out a little because the new mountain ranges are visible
-   much further than the old low rolling terrain. */
 const FOG_NEAR    = 600;
 const FOG_FAR     = 1300;
 
@@ -627,12 +676,16 @@ window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
 
 /* =========================================================================
-   TOUCH
+   STICK INPUT
    ========================================================================= */
 function makeStick(el, knob) {
   return {
     el, knob, id: null, x: 0, y: 0,
-    start(t) { this.id = t.identifier; this.update(t); },
+    start(t) {
+      this.id = t.identifier;
+      el.classList.add('active');
+      this.update(t);
+    },
     update(t) {
       const r = this.el.getBoundingClientRect();
       const cx = r.left + r.width * 0.5;
@@ -641,19 +694,93 @@ function makeStick(el, knob) {
       const max = r.width * 0.5 - 20;
       const len = Math.hypot(dx, dy);
       if (len > max) { dx = dx / len * max; dy = dy / len * max; }
-      knob.style.transform = `translate(${dx}px, ${dy}px)`;
-      this.x = dx / max; this.y = dy / max;
+      knob.style.transform = 'translate(' + dx + 'px, ' + dy + 'px)';
+      this.x = dx / max;
+      this.y = dy / max;
     },
     end() {
       this.id = null; this.x = 0; this.y = 0;
       knob.style.transform = 'translate(0px, 0px)';
+      el.classList.remove('active');
     }
   };
 }
-const leftStick  = makeStick(document.getElementById('leftStick'),  document.getElementById('leftKnob'));
-const rightStick = makeStick(document.getElementById('rightStick'), document.getElementById('rightKnob'));
+const leftStick  = makeStick(UI.leftStick,  UI.leftKnob);
+const rightStick = makeStick(UI.rightStick, UI.rightKnob);
 
-function pickStick(clientX, id) {
+/* =========================================================================
+   THROTTLE INPUT  — vertical slider
+   ========================================================================= */
+const throttleState = {
+  id: null,
+  rect: null,
+  setValue(v) {
+    v = clamp(v, 0, 1);
+    plane.throttle = v;
+    UI.throttleFill.style.height = (v * 100) + '%';
+    UI.throttleHandle.style.bottom = (v * 100) + '%';
+  },
+  sync() {
+    if (this.id !== null) return;
+    const v = clamp(plane.throttle, 0, 1);
+    UI.throttleFill.style.height = (v * 100) + '%';
+    UI.throttleHandle.style.bottom = (v * 100) + '%';
+  },
+  fromTouch(t) {
+    if (!this.rect) return;
+    const y = (t.clientY - this.rect.top) / this.rect.height;
+    this.setValue(1 - y);
+  }
+};
+
+UI.throttle.addEventListener('touchstart', (e) => {
+  e.stopPropagation();
+  e.preventDefault();
+  if (throttleState.id !== null) return;
+  const t = e.changedTouches[0];
+  if (!t) return;
+  throttleState.id = t.identifier;
+  throttleState.rect = UI.throttleTrack.getBoundingClientRect();
+  UI.throttle.classList.add('active');
+  throttleState.fromTouch(t);
+}, { passive: false });
+
+UI.throttle.addEventListener('touchmove', (e) => {
+  e.stopPropagation();
+  e.preventDefault();
+  if (throttleState.id === null) return;
+  for (const t of e.changedTouches) {
+    if (t.identifier === throttleState.id) {
+      throttleState.fromTouch(t);
+      break;
+    }
+  }
+}, { passive: false });
+
+function throttleRelease(e) {
+  e.stopPropagation();
+  e.preventDefault();
+  if (throttleState.id === null) return;
+  for (const t of e.changedTouches) {
+    if (t.identifier === throttleState.id) {
+      throttleState.id = null;
+      throttleState.rect = null;
+      UI.throttle.classList.remove('active');
+      break;
+    }
+  }
+}
+UI.throttle.addEventListener('touchend', throttleRelease, { passive: false });
+UI.throttle.addEventListener('touchcancel', throttleRelease, { passive: false });
+
+/* Initial sync — plane.throttle defaults to 0.7 */
+throttleState.sync();
+
+/* =========================================================================
+   TOUCH — window-level handler for the two sticks
+   The throttle element stops propagation, so it never reaches here.
+   ========================================================================= */
+function pickStick(clientX) {
   if (clientX < window.innerWidth * 0.5) {
     if (leftStick.id === null) return leftStick;
     if (rightStick.id === null) return rightStick;
@@ -666,7 +793,7 @@ function pickStick(clientX, id) {
 function onTouchStart(e) {
   if (e.target && e.target.tagName === 'BUTTON') return;
   for (const t of e.changedTouches) {
-    const s = pickStick(t.clientX, t.identifier);
+    const s = pickStick(t.clientX);
     if (s) s.start(t);
   }
   e.preventDefault();
@@ -709,6 +836,7 @@ function respawn() {
   throttleSmooth = 0.7;
   ratePitch = rateYaw = rateRoll = 0;
   crashTimer = 0;
+  throttleState.sync();
 }
 function crash() {
   crashTimer = 1.5;
@@ -743,6 +871,10 @@ function update(dt) {
   if (keys['ShiftLeft'] || keys['ShiftRight'])     plane.throttle += dt * 0.75;
   if (keys['ControlLeft'] || keys['ControlRight']) plane.throttle -= dt * 0.75;
   plane.throttle = clamp(plane.throttle, 0, 1);
+
+  /* Keep the throttle UI in sync if the value was changed by keyboard
+     or by the right stick while it is not being dragged. */
+  throttleState.sync();
 
   pitchIn = clamp(pitchIn, -1, 1);
   rollIn  = clamp(rollIn,  -1, 1);
@@ -867,7 +999,6 @@ if (window.visualViewport) {
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 
-/* --- helper: draw a textured model mesh with the standard model program --- */
 function drawTexturedModel(mesh) {
   if (!mesh) return;
   if (mesh.texture) {
@@ -973,7 +1104,7 @@ function render() {
   gl.uniformMatrix4fv(modelU.uModel, false, matPlane);
   drawTexturedModel(Models.planeMesh);
 
-  /* propeller (spinning around local Z) */
+  /* propeller */
   {
     m4identity(matTmpA); matTmpA[14] = -2.05;
     const ca = Math.cos(propAngle), sa = Math.sin(propAngle);
@@ -1011,7 +1142,7 @@ function render() {
     gl.cullFace(gl.BACK);
   }
 
-  /* -------- WORLD MODELS: TREES (per-variant meshes + textures) -------- */
+  /* -------- TREES -------- */
   gl.useProgram(modelProg);
   gl.uniformMatrix4fv(modelU.uViewProj, false, matViewProj);
   gl.uniform3fv(modelU.uCamPos, camPos);
@@ -1090,16 +1221,15 @@ function updateHud(dt) {
   let hdg = Math.atan2(f[0], -f[2]) * 180 / Math.PI;
   if (hdg < 0) hdg += 360;
 
-  /* Current biome under the aircraft */
   const biome = Terrain.getBiome(plane.pos[0], plane.pos[2], plane.pos[1]);
 
   hudStats.innerHTML =
-    `ALT ${alt.toFixed(0)} m<br>` +
-    `SPD ${spd.toFixed(0)} km/h<br>` +
-    `THR ${(throttleSmooth * 100).toFixed(0)}%<br>` +
-    `HDG ${hdg.toFixed(0)}°<br>` +
-    `CHUNKS ${Terrain.chunks.size}<br>` +
-    `BIOME ${biome.toUpperCase()}`;
+    'ALT ' + alt.toFixed(0) + ' m<br>' +
+    'SPD ' + spd.toFixed(0) + ' km/h<br>' +
+    'THR ' + (throttleSmooth * 100).toFixed(0) + '%<br>' +
+    'HDG ' + hdg.toFixed(0) + '&deg;<br>' +
+    'CHUNKS ' + Terrain.chunks.size + '<br>' +
+    'BIOME ' + biome.toUpperCase();
 }
 
 /* pre-generate the initial view */
