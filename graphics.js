@@ -38,10 +38,86 @@ const lerp  = (a, b, t) => a + (b - a) * t;
 const norm3 = (v) => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0]/l, v[1]/l, v[2]/l]; };
 
 /* =========================================================================
+   AIRCRAFT / HANGAR STATE
+   ========================================================================= */
+const SHOP_STORAGE_KEY = 'skycube-plane-shop-v1';
+
+function loadShopState() {
+  const fallback = {
+    money: 0,
+    ownedPlanes: { starter: true },
+    ownedColors: ['#e53b2f'],
+    selectedPlane: 'starter',
+    selectedColor: '#e53b2f',
+    activeColor: '#e53b2f',
+    lastReward: 0
+  };
+  try {
+    const raw = localStorage.getItem(SHOP_STORAGE_KEY);
+    if (!raw) return fallback;
+    const data = JSON.parse(raw);
+    const s = Object.assign({}, fallback, data);
+    s.money = Math.max(0, Number(s.money) || 0);
+    s.ownedPlanes = Object.assign({ starter: true }, data.ownedPlanes || {});
+    s.ownedPlanes.starter = true;
+    s.ownedColors = Array.isArray(data.ownedColors) ? data.ownedColors.slice() : fallback.ownedColors.slice();
+    if (!s.ownedColors.length) s.ownedColors.push('#e53b2f');
+    s.selectedPlane = PlaneModels.defs[s.selectedPlane] && s.ownedPlanes[s.selectedPlane] ? s.selectedPlane : 'starter';
+    s.selectedColor = /^#[0-9a-f]{6}$/i.test(s.selectedColor || '') ? s.selectedColor.toLowerCase() : '#e53b2f';
+    s.activeColor = /^#[0-9a-f]{6}$/i.test(s.activeColor || '') ? s.activeColor.toLowerCase() : '#e53b2f';
+    if (!s.ownedColors.some(c => String(c).toLowerCase() === s.activeColor)) {
+      s.activeColor = String(s.ownedColors[0]).toLowerCase();
+    }
+    if (!/^#[0-9a-f]{6}$/i.test(s.selectedColor)) s.selectedColor = s.activeColor;
+    return s;
+  } catch (e) {
+    return fallback;
+  }
+}
+const shopState = loadShopState();
+let shopOpen = false;
+let planeModelId = shopState.selectedPlane;
+let flightDistance = 0;
+let flightTime = 0;
+
+function saveShopState() {
+  try { localStorage.setItem(SHOP_STORAGE_KEY, JSON.stringify(shopState)); } catch (e) {}
+}
+
+function hexToRgb(hex) {
+  const h = String(hex || '#ffffff').replace('#','');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c+c).join('') : h, 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
+function hslToHex(h, s, l) {
+  h = ((h % 360) + 360) % 360;
+  s = clamp(s, 0, 1);
+  l = clamp(l, 0, 1);
+  const c = (1 - Math.abs(2*l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r=0,g=0,b=0;
+  if (h < 60) { r=c; g=x; }
+  else if (h < 120) { r=x; g=c; }
+  else if (h < 180) { g=c; b=x; }
+  else if (h < 240) { g=x; b=c; }
+  else if (h < 300) { r=x; b=c; }
+  else { r=c; b=x; }
+  return '#' + [r,g,b].map(v => Math.round((v+m)*255).toString(16).padStart(2,'0')).join('');
+}
+
+function initSelectedAircraft() {
+  PlaneModels.initGame();
+  Models.planeMesh = PlaneModels.getGameMesh(planeModelId);
+}
+
+/* =========================================================================
    INIT SYSTEMS
    ========================================================================= */
 Terrain.init(gl);
 Models.init(gl);
+initSelectedAircraft();
 
 /* =========================================================================
    BUILD UI  (all DOM is created here — index.html stays a blank shell)
@@ -84,7 +160,49 @@ const UI = (function buildUI() {
       '</div>',
     '</div>',
 
-    '<button id="resetBtn">RESPAWN</button>'
+    '<button id="resetBtn">RESPAWN</button>',
+
+    '<div id="shopBackdrop"></div>',
+    '<section id="shop" aria-hidden="true">',
+      '<div class="shop-card">',
+        '<div class="shop-top">',
+          '<span>HANGAR / RECOVERY</span>',
+          '<span id="shopCash">CASH $0</span>',
+        '</div>',
+        '<div class="shop-layout">',
+          '<div class="shop-stage">',
+            '<canvas id="shopPreview"></canvas>',
+            '<div class="spin-label">3D AIRFRAME PREVIEW · AUTO ROTATION</div>',
+          '</div>',
+          '<div class="shop-panel">',
+            '<div class="shop-plane-title">',
+              '<div id="shopPlaneName">SKY SCOUT</div>',
+              '<div id="shopPlanePrice">OWNED</div>',
+            '</div>',
+            '<div id="shopPlaneDescription"></div>',
+            '<div id="shopStats"></div>',
+            '<div class="shop-section-title">AIRCRAFT</div>',
+            '<div id="planeList"></div>',
+            '<div class="shop-section-title">PAINT / COLOUR</div>',
+            '<div class="paint-row">',
+              '<div id="colorWheel" aria-label="Choose a colour">',
+                '<div id="colorKnob"></div>',
+              '</div>',
+              '<div class="paint-info">',
+                '<div id="selectedColorSwatch"></div>',
+                '<div id="selectedColorText">#E53B2F · PREVIEW</div>',
+                '<button id="buyColorBtn">BUY COLOUR · $150</button>',
+                '<div id="ownedColors"></div>',
+              '</div>',
+            '</div>',
+          '</div>',
+        '</div>',
+        '<div class="shop-actions">',
+          '<div id="shopReward">Crash recovery: fly distance and time generate cash.</div>',
+          '<button id="flyAgainBtn">FLY AGAIN</button>',
+        '</div>',
+      '</div>',
+    '</section>'
   ].join('');
 
   document.body.appendChild(root);
@@ -105,9 +223,222 @@ const UI = (function buildUI() {
     throttleHandle: root.querySelector('.throttle-handle'),
     throttleTrack:  root.querySelector('.throttle-track'),
     throttleLabel:  root.querySelector('.throttle-label'),
-    resetBtn:  document.getElementById('resetBtn')
+    resetBtn:  document.getElementById('resetBtn'),
+    moneyHud: document.getElementById('moneyHud'),
+    shop: document.getElementById('shop'),
+    shopBackdrop: document.getElementById('shopBackdrop'),
+    shopPreview: document.getElementById('shopPreview'),
+    shopCash: document.getElementById('shopCash'),
+    shopPlaneName: document.getElementById('shopPlaneName'),
+    shopPlanePrice: document.getElementById('shopPlanePrice'),
+    shopPlaneDescription: document.getElementById('shopPlaneDescription'),
+    shopStats: document.getElementById('shopStats'),
+    planeList: document.getElementById('planeList'),
+    colorWheel: document.getElementById('colorWheel'),
+    colorKnob: document.getElementById('colorKnob'),
+    selectedColorSwatch: document.getElementById('selectedColorSwatch'),
+    selectedColorText: document.getElementById('selectedColorText'),
+    buyColorBtn: document.getElementById('buyColorBtn'),
+    ownedColors: document.getElementById('ownedColors'),
+    shopReward: document.getElementById('shopReward'),
+    flyAgainBtn: document.getElementById('flyAgainBtn')
   };
 })();
+
+;
+
+PlaneModels.initPreview(UI.shopPreview);
+
+/* =========================================================================
+   HANGAR / SHOP UI
+   ========================================================================= */
+const COLOR_PRICE = 150;
+
+function colorWheelPosition(hex) {
+  const n = parseInt(String(hex).replace('#',''), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const max = Math.max(r,g,b), min = Math.min(r,g,b);
+  const d = max - min;
+  let h = 0;
+  if (d) {
+    if (max === r) h = 60 * (((g-b)/d) % 6);
+    else if (max === g) h = 60 * ((b-r)/d + 2);
+    else h = 60 * ((r-g)/d + 4);
+  }
+  if (h < 0) h += 360;
+  const l = (max + min) / 510;
+  const s = d === 0 ? 0 : d / (255 - Math.abs(2 * l - 1) * 255);
+  return { h, s: clamp(s, 0, 1), l };
+}
+
+function updateColorWheelKnob() {
+  const { h, s } = colorWheelPosition(shopState.selectedColor);
+  const radius = Math.min(UI.colorWheel.clientWidth, UI.colorWheel.clientHeight) * 0.5;
+  const center = radius;
+  const r = radius * s * 0.90;
+  const a = (h - 90) * Math.PI / 180;
+  const cx = center + Math.cos(a) * r;
+  const cy = center + Math.sin(a) * r;
+  UI.colorKnob.style.left = cx + 'px';
+  UI.colorKnob.style.top = cy + 'px';
+  UI.colorKnob.style.background = shopState.selectedColor;
+}
+
+function setWheelFromPointer(e) {
+  const rect = UI.colorWheel.getBoundingClientRect();
+  const cx = rect.left + rect.width * 0.5;
+  const cy = rect.top + rect.height * 0.5;
+  const dx = e.clientX - cx, dy = e.clientY - cy;
+  const radius = Math.min(rect.width, rect.height) * 0.5;
+  const dist = Math.min(Math.hypot(dx,dy), radius);
+  const sat = dist / radius;
+  let hue = Math.atan2(dy,dx) * 180 / Math.PI + 90;
+  if (hue < 0) hue += 360;
+  shopState.selectedColor = hslToHex(hue, sat, 0.54);
+  updateShopUI();
+}
+
+UI.colorWheel.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  e.preventDefault();
+  UI.colorWheel.setPointerCapture?.(e.pointerId);
+  setWheelFromPointer(e);
+});
+UI.colorWheel.addEventListener('pointermove', e => {
+  if (e.buttons) {
+    e.stopPropagation();
+    e.preventDefault();
+    setWheelFromPointer(e);
+  }
+});
+UI.shop.addEventListener('pointerdown', e => e.stopPropagation());
+UI.shop.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
+UI.shop.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
+
+function renderPlaneList() {
+  UI.planeList.innerHTML = Object.keys(PlaneModels.defs).map(id => {
+    const def = PlaneModels.defs[id];
+    const owned = !!shopState.ownedPlanes[id];
+    const selected = id === planeModelId;
+    const price = def.price === 0 ? 'FREE' : '$' + def.price;
+    return '<button class="plane-choice ' + (owned ? 'owned' : 'locked') +
+      (selected ? ' selected' : '') + '" data-plane-id="' + id +
+      '" data-price="' + price + '">' +
+      '<span class="plane-choice-main"><b>' + def.name + '</b><span>' +
+      def.description + '</span></span></button>';
+  }).join('');
+
+  UI.planeList.querySelectorAll('.plane-choice').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      const id = btn.dataset.planeId;
+      const def = PlaneModels.get(id);
+      if (!shopState.ownedPlanes[id]) {
+        if (shopState.money < def.price) {
+          showMessage('NEED $' + (def.price - shopState.money) + ' MORE', 1100);
+          return;
+        }
+        shopState.money -= def.price;
+        shopState.ownedPlanes[id] = true;
+      }
+      planeModelId = id;
+      shopState.selectedPlane = id;
+      Models.planeMesh = PlaneModels.getGameMesh(id);
+      saveShopState();
+      updateShopUI();
+      showMessage(def.name + ' SELECTED', 900);
+    });
+  });
+}
+
+function renderOwnedColors() {
+  UI.ownedColors.innerHTML = shopState.ownedColors.map(color =>
+    '<button class="owned-color ' + (color.toLowerCase() === shopState.selectedColor.toLowerCase() ? 'selected' : '') +
+    '" data-color="' + color + '" title="' + color + '" style="background:' + color + '"></button>'
+  ).join('');
+  UI.ownedColors.querySelectorAll('.owned-color').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.preventDefault();
+      shopState.selectedColor = btn.dataset.color.toLowerCase();
+      shopState.activeColor = shopState.selectedColor;
+      saveShopState();
+      updateShopUI();
+    });
+  });
+}
+
+function updateShopUI() {
+  const def = PlaneModels.get(planeModelId);
+  UI.shopCash.textContent = 'CASH $' + Math.floor(shopState.money);
+  UI.moneyHud.textContent = 'CASH $' + Math.floor(shopState.money);
+  UI.shopPlaneName.textContent = def.name;
+  UI.shopPlanePrice.textContent = shopState.ownedPlanes[planeModelId] ? 'OWNED' : '$' + def.price;
+  UI.shopPlaneDescription.textContent = def.description;
+
+  const s = def.settings;
+  UI.shopStats.innerHTML = [
+    '<div class="shop-stat">MAX SPEED <b>' + s.maxSpeed + '</b></div>',
+    '<div class="shop-stat">CRUISE <b>' + s.cruiseSpeed + '</b></div>',
+    '<div class="shop-stat">ROLL <b>' + s.rollRate.toFixed(1) + '</b></div>',
+    '<div class="shop-stat">PITCH <b>' + s.pitchRate.toFixed(1) + '</b></div>'
+  ].join('');
+
+  UI.selectedColorSwatch.style.background = shopState.selectedColor;
+  UI.selectedColorText.textContent = shopState.selectedColor.toUpperCase() +
+    (shopState.ownedColors.some(c => c.toLowerCase() === shopState.selectedColor.toLowerCase()) ? ' · OWNED' : ' · PREVIEW');
+  const owned = shopState.ownedColors.some(c => c.toLowerCase() === shopState.selectedColor.toLowerCase());
+  UI.buyColorBtn.disabled = owned || shopState.money < COLOR_PRICE;
+  UI.buyColorBtn.textContent = owned ? 'COLOUR OWNED' :
+    (shopState.money < COLOR_PRICE ? 'NEED $' + (COLOR_PRICE - shopState.money) + ' MORE' : 'BUY COLOUR · $150');
+  UI.shopReward.textContent = shopState.lastReward > 0
+    ? 'Crash recovery: +$' + shopState.lastReward + ' from your last flight.'
+    : 'Crash recovery: fly distance and time generate cash.';
+  updateColorWheelKnob();
+  renderPlaneList();
+  renderOwnedColors();
+}
+
+UI.buyColorBtn.addEventListener('click', e => {
+  e.preventDefault();
+  const color = shopState.selectedColor.toLowerCase();
+  if (shopState.ownedColors.some(c => c.toLowerCase() === color)) return;
+  if (shopState.money < COLOR_PRICE) {
+    showMessage('NEED $' + (COLOR_PRICE - shopState.money) + ' MORE', 1100);
+    return;
+  }
+  shopState.money -= COLOR_PRICE;
+  shopState.ownedColors.push(color);
+  shopState.activeColor = color;
+  saveShopState();
+  updateShopUI();
+  showMessage('COLOUR PURCHASED', 900);
+});
+
+function openShop() {
+  shopState.selectedColor = shopState.activeColor;
+  shopOpen = true;
+  UI.shop.classList.add('open');
+  UI.shopBackdrop.classList.add('open');
+  UI.shop.setAttribute('aria-hidden', 'false');
+  canvas.classList.add('shop-blurred');
+  updateShopUI();
+}
+
+function closeShop() {
+  shopOpen = false;
+  UI.shop.classList.remove('open');
+  UI.shopBackdrop.classList.remove('open');
+  UI.shop.setAttribute('aria-hidden', 'true');
+  canvas.classList.remove('shop-blurred');
+}
+
+UI.flyAgainBtn.addEventListener('click', e => {
+  e.preventDefault();
+  closeShop();
+  respawn();
+});
+
+updateShopUI();
 
 /* =========================================================================
    UI TEXTURE WIRING
@@ -493,6 +824,7 @@ in vec3 vCol;
 in vec2 vUv;
 uniform sampler2D uTexture;
 uniform float uHasTexture;
+uniform vec3 uTint;
 uniform vec3 uCamPos, uSunDir, uSunColor, uFogColor;
 uniform float uFogNear, uFogFar;
 out vec4 fragColor;
@@ -506,6 +838,7 @@ void main(){
   vec4 texSample = texture(uTexture, vUv);
   vec3 texCol = texSample.rgb * 1.15;
   vec3 albedo = mix(vCol, texCol, uHasTexture);
+  albedo = mix(albedo, albedo * uTint, 0.84);
 
   float ndl = max(dot(n, uSunDir), 0.0);
   vec3 skyAmb = vec3(0.34, 0.40, 0.50);
@@ -522,7 +855,7 @@ void main(){
 }`);
 const modelU = locs(modelProg, [
   'uViewProj','uModel','uCamPos','uSunDir','uSunColor','uFogColor',
-  'uFogNear','uFogFar','uTexture','uHasTexture'
+  'uFogNear','uFogFar','uTexture','uHasTexture','uTint'
 ]);
 
 /* ---- outlines ---- */
@@ -663,10 +996,11 @@ const FOG_FAR     = 1300;
 /* =========================================================================
    GAME STATE
    ========================================================================= */
+const initialPlaneSpec = PlaneModels.get(planeModelId);
 const plane = {
   pos: [0, 0, 0],
   q: qIdentity(),
-  speed: 60,
+  speed: initialPlaneSpec.settings.cruiseSpeed,
   throttle: 0.7,
 };
 plane.pos[1] = Math.max(Terrain.terrainHeight(0, 0), 0) + 190;
@@ -677,10 +1011,8 @@ const camUp  = [0, 1, 0];
 let throttleSmooth = plane.throttle;
 let ratePitch = 0, rateYaw = 0, rateRoll = 0;
 
-const MAX_PITCH_RATE = 1.65;
-const MAX_ROLL_RATE  = 3.10;
-const MAX_YAW_RATE   = 0.95;
-const RESPONSE       = 6.5;
+/* Flight tuning is supplied by plane_models.js per aircraft. */
+
 
 let propAngle  = 0;
 let crashTimer = 0;
@@ -692,7 +1024,14 @@ window.addEventListener('keydown', e => {
   keys[e.code] = true;
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
   if (e.code === 'KeyO') showOutlines = !showOutlines;
-  if (e.code === 'KeyR') respawn();
+  if (e.code === 'KeyR') {
+    if (shopOpen) closeShop();
+    respawn();
+  }
+  if (e.code === 'Escape' && shopOpen) {
+    closeShop();
+    respawn();
+  }
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
 window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
@@ -838,31 +1177,42 @@ window.addEventListener('touchstart',  onTouchStart, { passive: false });
 window.addEventListener('touchmove',   onTouchMove,  { passive: false });
 window.addEventListener('touchend',    onTouchEnd,   { passive: false });
 window.addEventListener('touchcancel', onTouchEnd,   { passive: false });
-resetBtn.addEventListener('click', (e) => { e.preventDefault(); respawn(); });
+UI.resetBtn.addEventListener('click', (e) => { e.preventDefault(); if (shopOpen) closeShop(); respawn(); });
 
 /* =========================================================================
    MESSAGES / RESPAWN
    ========================================================================= */
 function showMessage(text, ms) {
-  msgEl.textContent = text;
-  msgEl.style.opacity = '1';
+  UI.msg.textContent = text;
+  UI.msg.style.opacity = '1';
   clearTimeout(showMessage._t);
-  showMessage._t = setTimeout(() => { msgEl.style.opacity = '0'; }, ms || 1400);
+  showMessage._t = setTimeout(() => { UI.msg.style.opacity = '0'; }, ms || 1400);
 }
 function respawn() {
   const x = plane.pos[0], z = plane.pos[2];
+  const spec = PlaneModels.get(planeModelId).settings;
   plane.pos[1] = Math.max(Terrain.terrainHeight(x, z), 0) + 190;
   plane.q = qIdentity();
-  plane.speed = 65;
+  plane.speed = spec.cruiseSpeed;
   plane.throttle = 0.7;
   throttleSmooth = 0.7;
   ratePitch = rateYaw = rateRoll = 0;
   crashTimer = 0;
+  flightDistance = 0;
+  flightTime = 0;
   throttleState.sync();
+  saveShopState();
 }
 function crash() {
-  crashTimer = 1.5;
-  showMessage('CRASHED', 1300);
+  if (crashTimer > 0 || shopOpen) return;
+  const reward = Math.max(25, Math.floor(flightDistance / 180 + flightTime * 0.75));
+  shopState.money += reward;
+  shopState.lastReward = reward;
+  flightDistance = 0;
+  flightTime = 0;
+  saveShopState();
+  crashTimer = 1.25;
+  showMessage('CRASHED  +$' + reward, 1500);
 }
 
 /* =========================================================================
@@ -871,11 +1221,16 @@ function crash() {
 function update(dt) {
   gameTime += dt;
 
+  if (shopOpen) return;
+
   if (crashTimer > 0) {
     crashTimer -= dt;
-    if (crashTimer <= 0) respawn();
+    if (crashTimer <= 0) openShop();
     return;
   }
+
+  const spec = PlaneModels.get(planeModelId).settings;
+  flightTime += dt;
 
   let pitchIn = 0, rollIn = 0, yawIn = 0;
   if (keys['KeyW'] || keys['ArrowUp'])    pitchIn += 1;
@@ -904,13 +1259,13 @@ function update(dt) {
 
   throttleSmooth += (plane.throttle - throttleSmooth) * Math.min(1, dt * 3.0);
 
-  const authority = clamp(plane.speed / 80, 0.40, 1.35);
+  const authority = clamp(plane.speed / spec.cruiseSpeed, 0.40, 1.35);
 
-  const targetPitch = pitchIn * MAX_PITCH_RATE * authority;
-  const targetRoll  = rollIn  * MAX_ROLL_RATE  * authority;
-  const targetYaw   = yawIn   * MAX_YAW_RATE   * authority;
+  const targetPitch = pitchIn * spec.pitchRate * authority;
+  const targetRoll  = rollIn  * spec.rollRate  * authority;
+  const targetYaw   = yawIn   * spec.yawRate   * authority;
 
-  const rp = 1 - Math.exp(-RESPONSE * dt);
+  const rp = 1 - Math.exp(-spec.response * dt);
   ratePitch = lerp(ratePitch, targetPitch, rp);
   rateRoll  = lerp(rateRoll,  targetRoll,  rp);
   rateYaw   = lerp(rateYaw,   targetYaw,   rp);
@@ -922,19 +1277,23 @@ function update(dt) {
   plane.q = qNorm(qMul(plane.q, rot));
 
   const rightAxis = qRot(plane.q, [1, 0, 0]);
-  const bankTurn = rightAxis[1] * 0.90 * clamp(plane.speed / 70, 0.4, 1.4);
+  const bankTurn = rightAxis[1] * spec.bankTurn * clamp(plane.speed / spec.cruiseSpeed, 0.4, 1.4);
   plane.q = qNorm(qMul(qAxisAngle(0, 1, 0, bankTurn * dt), plane.q));
 
   const fwd = qRot(plane.q, [0, 0, -1]);
-  const targetSpeed = 30 + throttleSmooth * 100;
+  const targetSpeed = spec.minSpeed + throttleSmooth * (spec.maxSpeed - spec.minSpeed);
 
-  plane.speed += (targetSpeed - plane.speed) * Math.min(1, dt * 0.9);
-  plane.speed -= fwd[1] * 30 * dt;
-  plane.speed = clamp(plane.speed, 20, 175);
+  plane.speed += (targetSpeed - plane.speed) * Math.min(1, dt * spec.acceleration);
+  plane.speed -= fwd[1] * spec.liftLoss * dt;
+  if (plane.speed < spec.stallSpeed) {
+    plane.pos[1] -= (spec.stallSpeed - plane.speed) * 0.10 * dt;
+  }
+  plane.speed = clamp(plane.speed, spec.minSpeed, spec.maxSpeed);
 
   plane.pos[0] += fwd[0] * plane.speed * dt;
   plane.pos[1] += fwd[1] * plane.speed * dt;
   plane.pos[2] += fwd[2] * plane.speed * dt;
+  flightDistance += plane.speed * dt;
 
   propAngle += (2.0 + throttleSmooth * 30.0) * dt;
 
@@ -1022,12 +1381,13 @@ window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
 resize();
 
-function drawTexturedModel(mesh) {
+function drawTexturedModel(mesh, tint) {
   if (!mesh || !mesh.vao || !mesh.count) return;
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, mesh.texture || null);
   gl.uniform1i(modelU.uTexture, 0);
   gl.uniform1f(modelU.uHasTexture, mesh.texture ? 1.0 : 0.0);
+  gl.uniform3fv(modelU.uTint, tint || [1,1,1]);
   gl.bindVertexArray(mesh.vao);
   gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
 }
@@ -1110,6 +1470,8 @@ function render() {
 
   /* -------- AIRCRAFT -------- */
   m4fromQuatPos(matPlane, plane.q, plane.pos);
+  const activePlaneMesh = PlaneModels.getGameMesh(planeModelId);
+  const activePlaneTint = hexToRgb(shopState.activeColor);
 
   gl.useProgram(modelProg);
   gl.uniformMatrix4fv(modelU.uViewProj, false, matViewProj);
@@ -1121,7 +1483,7 @@ function render() {
   gl.uniform1f(modelU.uFogFar, FOG_FAR);
 
   gl.uniformMatrix4fv(modelU.uModel, false, matPlane);
-  drawTexturedModel(Models.planeMesh);
+  drawTexturedModel(activePlaneMesh, activePlaneTint);
 
   /* propeller */
   {
@@ -1133,7 +1495,7 @@ function render() {
     m4mul(matTmpC, matTmpA, matTmpB);
     m4mul(matModel, matPlane, matTmpC);
     gl.uniformMatrix4fv(modelU.uModel, false, matModel);
-    drawTexturedModel(Models.propMesh);
+    drawTexturedModel(Models.propMesh, [1,1,1]);
   }
 
   /* -------- AIRCRAFT OUTLINES -------- */
@@ -1145,8 +1507,8 @@ function render() {
     gl.cullFace(gl.FRONT);
 
     gl.uniformMatrix4fv(outU.uModel, false, matPlane);
-    gl.bindVertexArray(Models.planeMesh.vao);
-    gl.drawElements(gl.TRIANGLES, Models.planeMesh.count, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(activePlaneMesh.vao);
+    gl.drawElements(gl.TRIANGLES, activePlaneMesh.count, gl.UNSIGNED_SHORT, 0);
 
     m4identity(matTmpA); matTmpA[14] = -2.05;
     const ca = Math.cos(propAngle), sa = Math.sin(propAngle);
@@ -1177,7 +1539,7 @@ function render() {
       const mesh = obj.mesh || Models.getTreeMesh(obj);
       m4fromTRS(matModel, obj.position, obj.rotation, obj.scale);
       gl.uniformMatrix4fv(modelU.uModel, false, matModel);
-      drawTexturedModel(mesh);
+      drawTexturedModel(mesh, [1,1,1]);
     }
   }
 
@@ -1271,6 +1633,8 @@ function frame(now) {
   update(dt);
   Terrain.updateChunks(plane.pos[0], plane.pos[2]);
   render();
+  if (shopOpen) PlaneModels.renderPreview(now, planeModelId, shopState.selectedColor);
+  UI.moneyHud.textContent = 'CASH $' + Math.floor(shopState.money);
   updateHud(dt);
 }
 requestAnimationFrame(frame);

@@ -888,12 +888,356 @@
       border-image-source: var(--ui-btn-frame-active, var(--ui-btn-frame, none));
       background: rgba(0, 0, 0, 0.15);
     }
+
+    /* =========================================================================
+       HANGAR / AIRCRAFT SHOP
+       ========================================================================= */
+    #glcanvas.shop-blurred {
+      filter: blur(9px) saturate(.72) brightness(.64);
+      transform: scale(1.025);
+    }
+
+    #shopBackdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      pointer-events: none;
+      opacity: 0;
+      background:
+        radial-gradient(circle at 50% 43%, rgba(36, 46, 61, .16), rgba(6, 9, 14, .72)),
+        rgba(8, 11, 16, .38);
+      transition: opacity .28s ease;
+    }
+    #shopBackdrop.open { opacity: 1; }
+
+    #shop {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(.985);
+      transition: opacity .28s ease, transform .28s ease;
+    }
+    #shop.open {
+      opacity: 1;
+      pointer-events: auto;
+      transform: scale(1);
+    }
+
+    .shop-card {
+      position: relative;
+      width: min(1120px, 96vw);
+      height: min(760px, 92vh);
+      overflow: hidden;
+      color: #f2ead8;
+      background:
+        linear-gradient(135deg, rgba(19,23,29,.96), rgba(10,13,18,.94));
+      border: 1px solid rgba(230,220,194,.30);
+      box-shadow: 0 28px 80px rgba(0,0,0,.58), inset 0 1px 0 rgba(255,255,255,.06);
+      display: grid;
+      grid-template-rows: 52px 1fr 64px;
+      border-radius: 5px;
+    }
+    .shop-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background-image: var(--grain);
+      opacity: .12;
+      mix-blend-mode: screen;
+    }
+    .shop-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      border-bottom: 1px solid rgba(230,220,194,.14);
+      letter-spacing: .13em;
+      font-size: 11px;
+      color: rgba(230,220,194,.72);
+      position: relative;
+      z-index: 2;
+    }
+    #shopCash {
+      color: #e8b45a;
+      font-weight: 800;
+      letter-spacing: .08em;
+    }
+    .shop-layout {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(320px, .7fr);
+      position: relative;
+      z-index: 2;
+    }
+    .shop-stage {
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 50% 46%, rgba(112,130,151,.13), transparent 42%);
+      border-right: 1px solid rgba(230,220,194,.12);
+    }
+    #shopPreview {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .shop-stage::after {
+      content: "";
+      position: absolute;
+      left: 9%;
+      right: 9%;
+      bottom: 15%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(230,220,194,.25), transparent);
+      box-shadow: 0 0 26px rgba(230,220,194,.13);
+      pointer-events: none;
+    }
+    .spin-label {
+      position: absolute;
+      left: 18px;
+      bottom: 16px;
+      color: rgba(230,220,194,.45);
+      font-size: 9px;
+      letter-spacing: .14em;
+    }
+    .shop-panel {
+      min-height: 0;
+      touch-action: auto;
+      overflow: auto;
+      padding: 18px 18px 12px;
+      background: rgba(9,12,17,.44);
+    }
+    .shop-plane-title {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 4px;
+    }
+    #shopPlaneName {
+      font-size: 20px;
+      line-height: 1;
+      letter-spacing: .07em;
+      color: #f3ead7;
+    }
+    #shopPlanePrice {
+      font-size: 11px;
+      color: #e8b45a;
+      white-space: nowrap;
+    }
+    #shopPlaneDescription {
+      color: rgba(230,220,194,.58);
+      font-size: 10px;
+      line-height: 1.5;
+      margin-bottom: 13px;
+    }
+    #shopStats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin-bottom: 16px;
+    }
+    .shop-stat {
+      padding: 7px 8px;
+      background: rgba(230,220,194,.045);
+      border: 1px solid rgba(230,220,194,.09);
+      font-size: 9px;
+      color: rgba(230,220,194,.55);
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .shop-stat b { color: #e9dfca; font-size: 10px; }
+    .shop-section-title {
+      font-size: 9px;
+      letter-spacing: .15em;
+      color: rgba(230,220,194,.42);
+      margin: 12px 0 8px;
+    }
+    #planeList {
+      display: grid;
+      gap: 6px;
+    }
+    .plane-choice {
+      width: 100%;
+      text-align: left;
+      color: #e9dfca;
+      background: rgba(230,220,194,.045);
+      border: 1px solid rgba(230,220,194,.12);
+      padding: 9px 10px;
+      cursor: pointer;
+      font: inherit;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .plane-choice:hover { background: rgba(230,220,194,.085); }
+    .plane-choice.selected {
+      border-color: rgba(232,180,90,.75);
+      box-shadow: inset 2px 0 0 #e8b45a;
+      background: rgba(232,180,90,.08);
+    }
+    .plane-choice.owned::after {
+      content: "OWNED";
+      color: rgba(230,220,194,.42);
+      font-size: 8px;
+      letter-spacing: .08em;
+    }
+    .plane-choice.locked::after {
+      content: attr(data-price);
+      color: #e8b45a;
+      font-size: 9px;
+    }
+    .plane-choice-main b { display: block; font-size: 10px; letter-spacing: .04em; }
+    .plane-choice-main span { color: rgba(230,220,194,.45); font-size: 8px; }
+    .paint-row {
+      display: grid;
+      grid-template-columns: 126px 1fr;
+      gap: 12px;
+      align-items: center;
+    }
+    #colorWheel {
+      width: 118px;
+      height: 118px;
+      border-radius: 50%;
+      position: relative;
+      cursor: crosshair;
+      touch-action: none;
+      background:
+        radial-gradient(circle, #fff 0 9%, transparent 10%),
+        radial-gradient(circle, transparent 0 24%, rgba(255,255,255,.12) 25%, transparent 26%),
+        conic-gradient(
+          #ff0000, #ffff00, #00ff00, #00ffff,
+          #0000ff, #ff00ff, #ff0000
+        );
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.22), 0 10px 25px rgba(0,0,0,.28);
+    }
+    #colorWheel::after {
+      content: "";
+      position: absolute;
+      inset: 17%;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 50%, rgba(255,255,255,.92), rgba(255,255,255,0) 72%);
+      mix-blend-mode: screen;
+      pointer-events: none;
+    }
+    #colorKnob {
+      position: absolute;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.65), 0 2px 7px rgba(0,0,0,.55);
+      transform: translate(-50%,-50%);
+      pointer-events: none;
+      z-index: 2;
+    }
+    .paint-info {
+      min-width: 0;
+    }
+    #selectedColorSwatch {
+      width: 100%;
+      height: 34px;
+      border: 1px solid rgba(255,255,255,.22);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+      margin-bottom: 7px;
+    }
+    #selectedColorText {
+      font-size: 9px;
+      letter-spacing: .1em;
+      color: rgba(230,220,194,.58);
+      margin-bottom: 8px;
+    }
+    #buyColorBtn, #flyAgainBtn {
+      border: 1px solid rgba(230,220,194,.28);
+      color: #17130d;
+      background: #e8b45a;
+      padding: 9px 12px;
+      cursor: pointer;
+      font: 800 10px ui-monospace, monospace;
+      letter-spacing: .08em;
+      width: 100%;
+    }
+    #buyColorBtn:disabled {
+      opacity: .42;
+      cursor: default;
+    }
+    #ownedColors {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 9px;
+    }
+    .owned-color {
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(255,255,255,.18);
+      cursor: pointer;
+      padding: 0;
+    }
+    .owned-color.selected { box-shadow: 0 0 0 2px #e8b45a; }
+    .shop-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 18px;
+      border-top: 1px solid rgba(230,220,194,.14);
+      position: relative;
+      z-index: 2;
+    }
+    #flyAgainBtn {
+      max-width: 260px;
+      margin-left: auto;
+    }
+    #shopReward {
+      color: rgba(230,220,194,.56);
+      font-size: 9px;
+      letter-spacing: .05em;
+    }
+    #moneyHud {
+      position: fixed;
+      right: calc(20px + var(--safe-r));
+      top: calc(20px + var(--safe-t));
+      z-index: 16;
+      color: #e8b45a;
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-shadow: 0 2px 4px rgba(0,0,0,.8);
+      pointer-events: none;
+    }
+
+    @media (max-width: 760px) {
+      #shop { padding: 8px; }
+      .shop-card {
+        width: 98vw;
+        height: 96vh;
+        grid-template-rows: 46px 1fr 58px;
+      }
+      .shop-layout { grid-template-columns: 1fr; grid-template-rows: 46% 54%; }
+      .shop-stage { border-right: 0; border-bottom: 1px solid rgba(230,220,194,.12); }
+      .shop-panel { padding: 12px; }
+      .shop-card #colorWheel { width: 104px; height: 104px; }
+      .paint-row { grid-template-columns: 112px 1fr; }
+    }
+
   </style>
 </head>
 
 <body>
   <canvas id="glcanvas"></canvas>
+  <div id="moneyHud">CASH $0</div>
   <script src="models.js"></script>
+  <script src="plane_models.js"></script>
   <script src="graphics.js"></script>
 
   <script>
