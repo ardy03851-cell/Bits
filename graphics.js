@@ -204,6 +204,7 @@ const UI = (function buildUI() {
                 '<div id="ownedColors"></div>',
               '</div>',
             '</div>',
+            '</div>',
             '<div class="shop-view" data-view="stickers"><div id="stickerGrid"></div><div id="stickerStatus">STICKERS ARE FREE · DROP PNG FILES INTO /STICKERS</div></div>',
             '<div class="shop-view" data-view="owned"><div id="ownedSummary"></div><div class="owned-section"><b>OWNED COLOURS</b><div id="ownedColorsCollection"></div></div><div class="owned-section"><b>OWNED STICKERS</b><div id="ownedStickersCollection"></div></div></div>',
           '</div>',
@@ -330,8 +331,11 @@ UI.colorWheel.addEventListener('pointermove', e => {
   }
 });
 UI.shop.addEventListener('pointerdown', e => e.stopPropagation());
+UI.shop.addEventListener('pointermove', e => e.stopPropagation());
 UI.shop.addEventListener('touchstart', e => e.stopPropagation(), { passive: true });
 UI.shop.addEventListener('touchmove', e => e.stopPropagation(), { passive: true });
+UI.shop.addEventListener('touchend', e => e.stopPropagation(), { passive: true });
+UI.shop.addEventListener('touchcancel', e => e.stopPropagation(), { passive: true });
 
 function renderPlaneList() {
   UI.planeList.innerHTML = Object.keys(PlaneModels.defs).map(id => {
@@ -545,20 +549,33 @@ function closeShop() {
   UI.shopBackdrop.classList.remove('open');
   UI.shop.setAttribute('aria-hidden', 'true');
   canvas.classList.remove('shop-blurred');
+  leftStick.end();
+  rightStick.end();
+  throttleState.id = null;
+  throttleState.rect = null;
+  UI.throttle.classList.remove('active');
+  throttleState.sync();
 }
 
+let flyAgainBusy = false;
 UI.flyAgainBtn.addEventListener('click', e => {
   e.preventDefault();
   e.stopPropagation();
+  if (flyAgainBusy) return;
+  flyAgainBusy = true;
   UI.flyAgainBtn.disabled = true;
   UI.flyAgainBtn.classList.add('pressed');
   window.setTimeout(() => {
-    crashTimer = 0;
-    closeShop();
-    respawn();
-    UI.flyAgainBtn.disabled = false;
-    UI.flyAgainBtn.classList.remove('pressed');
-    showMessage('READY TO FLY', 700);
+    try {
+      crashTimer = 0;
+      closeShop();
+      respawn();
+      showMessage('READY TO FLY', 700);
+    } finally {
+      flyAgainBusy = false;
+      UI.flyAgainBtn.disabled = false;
+      UI.flyAgainBtn.classList.remove('pressed');
+    }
   }, 120);
 });
 
