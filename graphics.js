@@ -8,14 +8,26 @@
    ========================================================================= */
 
 const canvas = document.getElementById('glcanvas');
+
+function showFatalError(title, detail) {
+  document.body.innerHTML =
+    '<div style="position:fixed;inset:0;display:grid;place-items:center;padding:24px;' +
+    'background:#0a1626;color:#f4f8ff;font-family:system-ui,sans-serif;text-align:center">' +
+      '<div style="max-width:620px">' +
+        '<div style="font-size:24px;font-weight:700;margin-bottom:10px">' + title + '</div>' +
+        '<div style="font-size:14px;line-height:1.6;opacity:.82">' + detail + '</div>' +
+      '</div>' +
+    '</div>';
+}
+
 const gl = canvas.getContext('webgl2', {
   antialias: true, alpha: false, powerPreference: 'high-performance',
   preserveDrawingBuffer: false
 });
 if (!gl) {
-  document.body.innerHTML =
-    '<div style="color:#fff;padding:40px;font-family:sans-serif">WebGL2 is required.</div>';
-  throw new Error('no webgl2');
+  showFatalError('WebGL 2 is unavailable',
+    'SkyCube needs WebGL 2 to render the flight world. Enable hardware acceleration or use a browser/device with WebGL 2 support.');
+  throw new Error('SkyCube: WebGL2 unavailable');
 }
 
 /* =========================================================================
@@ -278,20 +290,30 @@ function m4fromTRS(o, p, rotY, scale) {
    SHADERS
    ========================================================================= */
 function compile(type, src) {
-  const s = gl.createShader(type);
-  gl.shaderSource(s, src);
-  gl.compileShader(s);
-  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS))
-    console.error(gl.getShaderInfoLog(s), src);
-  return s;
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, src);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(shader) || 'unknown shader compile error';
+    gl.deleteShader(shader);
+    throw new Error('SkyCube shader compile failed: ' + log);
+  }
+  return shader;
 }
 function makeProgram(vsSrc, fsSrc) {
   const p = gl.createProgram();
-  gl.attachShader(p, compile(gl.VERTEX_SHADER, vsSrc));
-  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fsSrc));
+  const vs = compile(gl.VERTEX_SHADER, vsSrc);
+  const fs = compile(gl.FRAGMENT_SHADER, fsSrc);
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
   gl.linkProgram(p);
-  if (!gl.getProgramParameter(p, gl.LINK_STATUS))
-    console.error(gl.getProgramInfoLog(p));
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    const log = gl.getProgramInfoLog(p) || 'unknown program link error';
+    gl.deleteProgram(p);
+    throw new Error('SkyCube program link failed: ' + log);
+  }
   return p;
 }
 function locs(p, names) {
@@ -998,17 +1020,14 @@ if (window.visualViewport) {
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+resize();
 
 function drawTexturedModel(mesh) {
-  if (!mesh) return;
-  if (mesh.texture) {
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, mesh.texture);
-    gl.uniform1i(modelU.uTexture, 0);
-    gl.uniform1f(modelU.uHasTexture, 1.0);
-  } else {
-    gl.uniform1f(modelU.uHasTexture, 0.0);
-  }
+  if (!mesh || !mesh.vao || !mesh.count) return;
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, mesh.texture || null);
+  gl.uniform1i(modelU.uTexture, 0);
+  gl.uniform1f(modelU.uHasTexture, mesh.texture ? 1.0 : 0.0);
   gl.bindVertexArray(mesh.vao);
   gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0);
 }
@@ -1258,5 +1277,11 @@ requestAnimationFrame(frame);
 
 canvas.addEventListener('webglcontextlost', e => {
   e.preventDefault();
-  showMessage('CONTEXT LOST', 4000);
+  showMessage('GRAPHICS PAUSED', 4000);
+});
+
+canvas.addEventListener('webglcontextrestored', () => {
+  // WebGL resources are invalid after a context loss. Rebuilding the entire
+  // renderer is safer than trying to resurrect individual buffers/textures.
+  location.reload();
 });
